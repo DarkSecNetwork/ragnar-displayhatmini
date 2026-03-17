@@ -40,15 +40,14 @@ def main():
         from waveshare_epd import displayhatmini
     except ImportError:
         return 0
-    W = int(os.environ.get("DISPLAY_BOOT_W", "320"))
-    H = int(os.environ.get("DISPLAY_BOOT_H", "240"))
-    # Black background, white text; W,H from env support portrait (240x320) or landscape (320x240)
     BG = (0, 0, 0)
     FG = (255, 255, 255)
     try:
         epd = displayhatmini.EPD()
         if epd.init() != 0:
             return 1
+        # Use driver's actual width/height so we always match the display (portrait 240x320 or landscape 320x240)
+        W, H = epd.width, epd.height
         # Clear to black
         epd.Clear(0)
     except Exception:

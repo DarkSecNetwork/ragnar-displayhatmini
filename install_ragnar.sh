@@ -273,21 +273,29 @@ if shared_py.exists():
     text = re.sub(r'"ref_height"\s*:\s*\d+', f'"ref_height": {height}', text, count=1)
     
     if mode == "displayhatmini":
-        # Add displayhatmini to DISPLAY_PROFILES dict
-        if '"displayhatmini"' not in text:
-            # Replace epd2in13_V4 entry and add displayhatmini after it
+        # Add or update displayhatmini in DISPLAY_PROFILES with chosen orientation (portrait 240x320 or landscape 320x240)
+        dhat_entry = f'"displayhatmini": {{"ref_width": {width}, "ref_height": {height}, "default_flip": False}}'
+        if '"displayhatmini"' in text:
+            # Update existing entry to current width/height (portrait vs landscape)
+            text = re.sub(
+                r'"displayhatmini"\s*:\s*\{\s*"ref_width"\s*:\s*\d+\s*,\s*"ref_height"\s*:\s*\d+[^}]*\}',
+                dhat_entry,
+                text,
+                count=1
+            )
+        else:
+            # Add displayhatmini after epd2in13_V4
             if '"epd2in13_V4"' in text:
                 text = re.sub(
                     r'("epd2in13_V4"\s*:\s*\{[^}]+\},?)',
-                    r'\1\n    "displayhatmini": {"ref_width": 320, "ref_height": 240, "default_flip": False},',
+                    r'\1\n    ' + dhat_entry + ',',
                     text,
                     count=1
                 )
-            # Fallback: add before closing brace of DISPLAY_PROFILES
             elif 'DISPLAY_PROFILES = {' in text:
                 text = re.sub(
                     r'(DISPLAY_PROFILES\s*=\s*\{[^\}]*)(\})',
-                    r'\1    "displayhatmini": {"ref_width": 320, "ref_height": 240, "default_flip": False},\n\2',
+                    r'\1    ' + dhat_entry + r',\n\2',
                     text,
                     count=1
                 )
@@ -1249,13 +1257,12 @@ def main():
         from waveshare_epd import displayhatmini
     except ImportError:
         return 0
-    W = int(os.environ.get("DISPLAY_BOOT_W", "320"))
-    H = int(os.environ.get("DISPLAY_BOOT_H", "240"))
     BG, FG = (0, 0, 0), (255, 255, 255)
     try:
         epd = displayhatmini.EPD()
         if epd.init() != 0:
             return 1
+        W, H = epd.width, epd.height
         epd.Clear(0)
     except Exception:
         return 1
