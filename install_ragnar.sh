@@ -500,8 +500,8 @@ PYDIAG
       sed -i 's/spidev==3\.5/spidev>=3.6.0/' requirements.txt 2>/dev/null || true
       sed -i 's/cryptography.*/cryptography<45,>=41.0.5/' requirements.txt 2>/dev/null || true
     fi
-    pip3 install --break-system-packages -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
-    pip3 install --break-system-packages pillow numpy pandas pandas-stubs Flask-SQLAlchemy paramiko st7789 RPi.GPIO 2>/dev/null || true
+    pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
+    pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 RPi.GPIO 2>/dev/null || true
     fixes_applied=$((fixes_applied + 1))
   fi
   
@@ -643,8 +643,8 @@ auto_fix_service_errors() {
       sed -i 's/pisugar[<>=!].*/pisugar>=0.1.1/' requirements.txt 2>/dev/null || \
       sed -i 's/^pisugar$/pisugar>=0.1.1/' requirements.txt 2>/dev/null || true
     fi
-    pip3 install --break-system-packages -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
-      pip3 install --break-system-packages pillow numpy pandas pandas-stubs paramiko st7789 RPi.GPIO 2>/dev/null || true
+    pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
+      pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 RPi.GPIO 2>/dev/null || true
     fi
     
     if echo "$error_log" | grep -qi "PermissionError\|Permission denied"; then
@@ -718,7 +718,7 @@ echo "Installing base packages..."
 apt install -y git wget curl lsof sudo build-essential python3 python3-pip python3-dev python3-pil python3-numpy python3-pandas python3-spidev libjpeg-dev zlib1g-dev libpng-dev libffi-dev libssl-dev libgpiod-dev libcap-dev libi2c-dev libopenjp2-7 libopenblas-dev libblas-dev liblapack-dev nmap bluez bluez-tools bridge-utils network-manager i2c-tools rfkill || true
 
 echo "Installing Python packages..."
-pip3 install --break-system-packages --ignore-installed typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai RPi.GPIO "cryptography<45" || true
+  pip3 install --break-system-packages --ignore-installed --no-cache-dir typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai RPi.GPIO "cryptography<45" || true
 
 echo "Enabling SPI and I2C..."
 if command -v raspi-config >/dev/null 2>&1; then
@@ -811,14 +811,14 @@ if [ -f requirements.txt ]; then
   sed -i 's/cryptography.*/cryptography<45,>=41.0.5/' requirements.txt 2>/dev/null || true
   # libcap-dev (installed above) is required for python-prctl (Ragnar upstream requirement)
   # Install requirements, suppressing deprecation warnings
-  pip3 install --break-system-packages --ignore-installed -r requirements.txt 2>&1 | grep -v "DEPRECATION:" || true
+  pip3 install --break-system-packages --ignore-installed --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" || true
   # If python-prctl still failed (e.g. libcap not found), try without it so Ragnar can start
   if ! python3 -c "import prctl" 2>/dev/null; then
     echo "  python-prctl not available (optional); continuing..."
   fi
 fi
-# Install core packages, suppressing deprecation warnings
-pip3 install --break-system-packages --ignore-installed paramiko st7789 luma.lcd luma.core pandas pandas-stubs Flask-SQLAlchemy openai RPi.GPIO "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
+# Install core packages (--no-cache-dir avoids invalid cached wheels e.g. paramiko-0.9_ivysaur from Pwnagotchi)
+pip3 install --break-system-packages --ignore-installed --no-cache-dir paramiko st7789 luma.lcd luma.core pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" openai RPi.GPIO "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing Display HAT Mini dependencies (gpiod, gpiodevice)..."

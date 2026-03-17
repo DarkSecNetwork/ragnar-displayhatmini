@@ -30,6 +30,8 @@ Save the output (or the last 50 lines before the crash) so you can see the Pytho
 | "Buffer size mismatch" / EPD init fails | Display HAT Mini buffer validation | Re-run installer (it patches shared.py to skip this for displayhatmini) |
 | Out of memory / killed | Pi Zero 2 W low RAM | Close other apps; ensure only one Ragnar instance; check `free -m` |
 | Display / GPIO errors | SPI not enabled or wrong driver | `sudo raspi-config nonint do_spi 0` then reboot |
+| `Invalid wheel filename (invalid version): 'paramiko-0.9_ivysaur'` | Bad cached wheel (e.g. from Pwnagotchi) | `pip3 cache purge` then re-run installer, or run installer (it uses `--no-cache-dir`) |
+| `types-flask-migrate requires Flask-SQLAlchemy>=3.0.1` | Optional type stub conflict | Harmless; installer now installs `Flask-SQLAlchemy>=3.0.1`. Ignore or `pip3 install --break-system-packages "Flask-SQLAlchemy>=3.0.1"` |
 
 ### 3. Reduce restart thrashing
 
