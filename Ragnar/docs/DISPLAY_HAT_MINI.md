@@ -7,8 +7,11 @@
 
 **During install:** When you choose option 9 (Display HAT Mini), pick **1** for Landscape or **2** for Portrait.
 
+**How it works:**  
+The physical panel is 320×240. The installer always initializes the ST7789 at **320×240** so the **full screen** is used. For portrait it reports 240×320 to Ragnar and **rotates the image in software** before sending, so there is no "1/3 static" strip and the UI fills the display.
+
 **Change later over SSH:**  
-The st7789 driver only allows rotation 0 or 180; for portrait the driver must use **240×320** and rotation **0** (not 90). Use the sed commands below, or re-run the installer and pick the desired orientation.
+Re-run the installer and choose orientation, or use the sed commands below to edit the generated driver and config.
 
 Portrait:
 

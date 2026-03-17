@@ -836,16 +836,17 @@ PY
     exit 1
   fi
   DHAT_ROT="${DISPLAYHATMINI_ROTATION:-180}"
-  # st7789 allows only rotation 0 or 180 for non-square panels; 90/270 are rejected for 320x240.
-  # For portrait we pass 240x320 with rotation 0 (or 180); for landscape 320x240 with 0 or 180.
+  # Physical panel is always 320x240. st7789 only allows rotation 0 or 180 (no 90/270 for non-square).
+  # For portrait: init ST7789 at 320x240 (full panel), report logical 240x320 to Ragnar, rotate image in software so full screen is used.
+  # For landscape: init 320x240 with rotation 180 (or 0); no image rotation.
   if [ "$DHAT_ROT" = "90" ]; then
-    DHAT_W=240; DHAT_H=320; DHAT_ST7789_ROT=0
+    DHAT_LOGICAL_W=240; DHAT_LOGICAL_H=320; DHAT_ST7789_ROT=0; DHAT_PORTRAIT=1
   elif [ "$DHAT_ROT" = "270" ]; then
-    DHAT_W=240; DHAT_H=320; DHAT_ST7789_ROT=180
+    DHAT_LOGICAL_W=240; DHAT_LOGICAL_H=320; DHAT_ST7789_ROT=180; DHAT_PORTRAIT=1
   elif [ "$DHAT_ROT" = "0" ]; then
-    DHAT_W=320; DHAT_H=240; DHAT_ST7789_ROT=0
+    DHAT_LOGICAL_W=320; DHAT_LOGICAL_H=240; DHAT_ST7789_ROT=0; DHAT_PORTRAIT=0
   else
-    DHAT_W=320; DHAT_H=240; DHAT_ST7789_ROT=180
+    DHAT_LOGICAL_W=320; DHAT_LOGICAL_H=240; DHAT_ST7789_ROT=180; DHAT_PORTRAIT=0
   fi
   cat > "$WSPATH/displayhatmini.py" <<PY
 import sys
@@ -900,13 +901,12 @@ class EPD:
             return -1
         if self.disp is None:
             try:
-                # Display HAT Mini pin configuration:
-                # SPI port 0, CS=1, DC=9, RST=None (not used), BL=13
-                # st7789 only allows rotation 0/180 for non-square; we pass width/height and rotation accordingly
-                # Note: st7789 library handles backlight automatically when backlight=13 is specified
+                # Display HAT Mini: physical panel is always 320x240. Init ST7789 at full physical size so entire panel is used.
+                # Portrait: we report 240x320 to Ragnar and rotate the image in software in display()/Clear().
+                self._portrait = $DHAT_PORTRAIT
                 self.disp = st7789.ST7789(
-                    width=$DHAT_W,
-                    height=$DHAT_H,
+                    width=320,
+                    height=240,
                     rotation=$DHAT_ST7789_ROT,
                     port=0,
                     cs=1,
@@ -918,9 +918,8 @@ class EPD:
                     offset_top=0
                 )
                 self.disp.begin()
-                # Report logical size (st7789 swaps width/height when rotation is 90 or 270)
-                self.width = self.disp.width
-                self.height = self.disp.height
+                self.width = $DHAT_LOGICAL_W
+                self.height = $DHAT_LOGICAL_H
                 # Ensure backlight is on (redundant but safe)
                 self._ensure_backlight()
                 print("Display HAT Mini initialized successfully", file=sys.stderr)
@@ -944,6 +943,8 @@ class EPD:
                 return
         try:
             buffer_img = self.getbuffer(img)
+            if getattr(self, '_portrait', False):
+                buffer_img = buffer_img.transpose(Image.ROTATE_270)
             self.disp.display(buffer_img)
         except Exception as e:
             print(f"ERROR: Display update failed: {e}", file=sys.stderr)
@@ -959,7 +960,11 @@ class EPD:
                 fill = (color, color, color) if color < 256 else (255, 255, 255)
             else:
                 fill = color
-            self.disp.display(Image.new("RGB", (self.width, self.height), fill))
+            if getattr(self, '_portrait', False):
+                fill_img = Image.new("RGB", (320, 240), fill)
+            else:
+                fill_img = Image.new("RGB", (self.width, self.height), fill)
+            self.disp.display(fill_img)
         except Exception as e:
             print(f"ERROR: Clear failed: {e}", file=sys.stderr)
     
