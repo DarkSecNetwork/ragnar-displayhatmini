@@ -1153,7 +1153,7 @@ if display_py.exists():
                         log_lines = [l.strip()[:50] for l in out.strip().splitlines() if l.strip()][-6:]
                     except Exception:
                         log_lines = []
-                    img = Image.new('RGB', (w, h), (255, 255, 255))
+                    img = Image.new('RGB', (w, h), (0, 0, 0))
                     draw = ImageDraw.Draw(img)
                     try:
                         font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
@@ -1161,12 +1161,12 @@ if display_py.exists():
                     except Exception:
                         font = ImageDraw.ImageFont.load_default()
                         font_sm = font
-                    draw.text((max(0, w//2 - 60), 8), "Loading Ragnar...", font=font, fill=(0, 0, 0))
+                    draw.text((max(0, w//2 - 60), 8), "Loading Ragnar...", font=font, fill=(255, 255, 255))
                     y = 36
                     for line in log_lines:
                         if y + 12 > h:
                             break
-                        draw.text((4, y), line, font=font_sm, fill=(0, 0, 0))
+                        draw.text((4, y), line, font=font_sm, fill=(255, 255, 255))
                         y += 12
                     self.epd_helper.display_partial(img)
                     if done and done.is_set():
@@ -1185,13 +1185,13 @@ if display_py.exists():
             if getattr(self.shared_data, 'config', {}).get('epd_type') == 'displayhatmini':
                 from PIL import Image, ImageDraw
                 w, h = self.shared_data.width, self.shared_data.height
-                img = Image.new('RGB', (w, h), (255, 255, 255))
+                img = Image.new('RGB', (w, h), (0, 0, 0))
                 draw = ImageDraw.Draw(img)
                 try:
                     font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
                 except Exception:
                     font = ImageDraw.ImageFont.load_default()
-                draw.text((w//2 - 70, h//2 - 12), "Loading Ragnar...", font=font, fill=(0, 0, 0))
+                draw.text((w//2 - 70, h//2 - 12), "Loading Ragnar...", font=font, fill=(255, 255, 255))
                 self.epd_helper.display_partial(img)
         except Exception:
             pass
@@ -1251,11 +1251,12 @@ def main():
         return 0
     W = int(os.environ.get("DISPLAY_BOOT_W", "320"))
     H = int(os.environ.get("DISPLAY_BOOT_H", "240"))
+    BG, FG = (0, 0, 0), (255, 255, 255)
     try:
         epd = displayhatmini.EPD()
         if epd.init() != 0:
             return 1
-        epd.Clear(255)
+        epd.Clear(0)
     except Exception:
         return 1
     try:
@@ -1270,7 +1271,7 @@ def main():
         except Exception:
             font_small = None
         for text, duration in [("Booting...", 2.0), ("Starting Ragnar...", 2.0)]:
-            img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), (255, 255, 255))
+            img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
             draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
             if font_big:
                 bbox = draw.textbbox((0, 0), text, font=font_big)
@@ -1278,22 +1279,22 @@ def main():
                 bbox = (0, 0, len(text) * 8, 20)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
             x, y = (W - tw) // 2, (H - th) // 2
-            draw.text((x, y), text, font=font_big, fill=(0, 0, 0))
+            draw.text((x, y), text, font=font_big, fill=FG)
             epd.display(img)
             time.sleep(duration)
         log_lines = _get_boot_log_lines(max_lines=10, line_chars=48)
-        img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), (255, 255, 255))
+        img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
         draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
-        draw.text((4, 2), "Boot log:", font=font_small, fill=(0, 0, 0))
+        draw.text((4, 2), "Boot log:", font=font_small, fill=FG)
         y = 16
         for line in log_lines:
             if y + 14 > H:
                 break
-            draw.text((4, y), line[:52], font=font_small, fill=(0, 0, 0))
+            draw.text((4, y), line[:52], font=font_small, fill=FG)
             y += 13
         epd.display(img)
         time.sleep(6.0)
-        img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), (255, 255, 255))
+        img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
         draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
         text = "Loading..."
         if font_big:
@@ -1302,7 +1303,7 @@ def main():
             bbox = (0, 0, len(text) * 8, 20)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         x, y = (W - tw) // 2, (H - th) // 2
-        draw.text((x, y), text, font=font_big, fill=(0, 0, 0))
+        draw.text((x, y), text, font=font_big, fill=FG)
         epd.display(img)
         time.sleep(4.0)
     except Exception:

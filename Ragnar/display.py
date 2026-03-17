@@ -1166,12 +1166,14 @@ class Display:
     def run(self):
         """Main loop for updating the EPD display with shared data."""
         # Show Loading Ragnar + last ragnar log lines until deferred init (Display HAT Mini)
+        # Black background, white text; w,h from config so landscape/portrait is correct
         try:
             if getattr(self.shared_data, 'config', {}).get('epd_type') == 'displayhatmini':
                 w, h = self.shared_data.width, self.shared_data.height
                 done = getattr(self.shared_data, '_deferred_init_done', None)
                 timeout = 30.0
                 start = time.time()
+                bg, fg = (0, 0, 0), (255, 255, 255)
                 while (time.time() - start) < timeout:
                     try:
                         out = subprocess.check_output(
@@ -1180,7 +1182,7 @@ class Display:
                         log_lines = [l.strip()[:50] for l in out.strip().splitlines() if l.strip()][-6:]
                     except Exception:
                         log_lines = []
-                    img = Image.new('RGB', (w, h), (255, 255, 255))
+                    img = Image.new('RGB', (w, h), bg)
                     draw = ImageDraw.Draw(img)
                     try:
                         font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
@@ -1188,12 +1190,12 @@ class Display:
                     except Exception:
                         font = ImageDraw.ImageFont.load_default()
                         font_sm = font
-                    draw.text((max(0, w//2 - 60), 8), "Loading Ragnar...", font=font, fill=(0, 0, 0))
+                    draw.text((max(0, w//2 - 60), 8), "Loading Ragnar...", font=font, fill=fg)
                     y = 36
                     for line in log_lines:
                         if y + 12 > h:
                             break
-                        draw.text((4, y), line, font=font_sm, fill=(0, 0, 0))
+                        draw.text((4, y), line, font=font_sm, fill=fg)
                         y += 12
                     self.epd_helper.display_partial(img)
                     if done and done.is_set():
