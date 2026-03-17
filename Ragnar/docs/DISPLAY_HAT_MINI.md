@@ -60,9 +60,9 @@ sudo reboot
 
 **Re-enable the LED:** Remove or comment out the line in the same file, then reboot.
 
-## Boot splash
+## Boot splash and on-screen logs
 
-On Display HAT Mini the installer runs a short splash before Ragnar: “Booting…”, “Starting Ragnar…”, “Loading…”. Then Ragnar shows “Loading Ragnar…” until the first full UI frame. This avoids a black screen during the long startup.
+On Display HAT Mini the installer runs a short splash before Ragnar: “Booting…”, “Starting Ragnar…”, “Loading…”. Then Ragnar shows “Loading Ragnar…” until the first full UI frame. After the splash, the display shows **Loading Ragnar…** and the last 6 lines of the Ragnar service log, updating every 2 s until the UI is ready, so you can see startup progress and errors on the HAT.
 
 ## Blank or wrong display
 

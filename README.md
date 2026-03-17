@@ -18,7 +18,7 @@ cd ragnar-displayhatmini
 sudo ./install_ragnar.sh
 ```
 
-**Or script only (no clone):**
+**Or script only (installer is on the `main` branch):**
 ```bash
 wget https://raw.githubusercontent.com/DarkSecNetwork/ragnar-displayhatmini/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
