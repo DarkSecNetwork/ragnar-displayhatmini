@@ -63,6 +63,22 @@ sudo reboot
 
 **Re-enable the LED:** Remove or comment out the line in the same file, then reboot.
 
+## Buttons and settings menu
+
+When using Display HAT Mini (Pimoroni-style 4 buttons), the following mapping is used in the Ragnar UI:
+
+| Button | Action |
+|--------|--------|
+| **A** | Toggle settings menu (open/close) |
+| **B** | Enter / Select (short press) |
+| **X** | Up (in menu) |
+| **Y** | Down (in menu) |
+| **Back** | Long press **B** or double-tap **B** |
+
+The settings menu includes sections: Network (WiFi, Ethernet, Bluetooth), WiFi Attack, AI, Display (brightness, rotation, invert colors), Sound, System (device name, IP, CPU, temp), Storage, Security, Remote Access, Logging, Updates, Developer, and Power (Restart, Shutdown). Toggle items can be changed with **B** (Select); values are stored in config. Restart and Shutdown run after a short delay. **Invert Colors** toggles `screen_reversed` (display flip).
+
+Button GPIO pins (BCM): A=5, B=6, X=16, Y=24. If your HAT uses different pins, edit `Ragnar/displayhatmini_buttons.py` and adjust `PIN_A`, `PIN_B`, `PIN_X`, `PIN_Y`.
+
 ## Boot splash and on-screen logs
 
 On Display HAT Mini the installer runs a short splash before Ragnar: “Booting…”, “Starting Ragnar…”, “Loading…”. Then Ragnar shows “Loading Ragnar…” until the first full UI frame. After the splash, the display shows **Loading Ragnar…** and the last 6 lines of the Ragnar service log, updating every 2 s until the UI is ready, so you can see startup progress and errors on the HAT.

@@ -392,17 +392,41 @@ install_pisugar_support() {
   if [[ ! "$INSTALL_PISUGAR" =~ ^[Yy]$ ]]; then
     return 0
   fi
-  echo "Installing PiSugar support (non-interactive)..."
-  export DEBIAN_FRONTEND=noninteractive
-  if curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh | bash; then
-    echo "PiSugar installed."
-    echo "Skipping interactive model dialog to avoid SSH freeze."
-    echo "After hardware is attached, run: sudo dpkg-reconfigure pisugar-server"
+  echo "========================================"
+  echo " PiSugar power manager"
+  echo "========================================"
+  # Do NOT use: curl ... | bash  — that feeds the script on stdin, so whiptail/dialog
+  # cannot read keyboard input and model selection appears broken.
+  # Run from a file so stdin stays the terminal (use: ssh -t user@pi for SSH).
+  PISUGAR_TMP="$(mktemp /tmp/pisugar-power-manager-XXXXXX.sh)"
+  if ! curl -sSL -f "http://cdn.pisugar.com/release/pisugar-power-manager.sh" -o "$PISUGAR_TMP"; then
+    echo "WARNING: Could not download PiSugar installer."
+    rm -f "$PISUGAR_TMP"
+    return 1
+  fi
+  chmod +x "$PISUGAR_TMP"
+  if [ -t 0 ]; then
+    echo "Interactive mode: you can choose your PiSugar model in the prompts."
+    echo "(If prompts still fail, use: ssh -t ... so SSH allocates a terminal.)"
+    unset DEBIAN_FRONTEND
+  else
+    echo "WARNING: No TTY on stdin — interactive PiSugar dialogs will not work."
+    echo "Re-run this installer from a real terminal, or run manually after install:"
+    echo "  curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh"
+    export DEBIAN_FRONTEND=noninteractive
+  fi
+  if bash "$PISUGAR_TMP"; then
+    echo "PiSugar installer finished."
+    if [ ! -t 0 ]; then
+      echo "If hardware is attached, run: sudo dpkg-reconfigure pisugar-server"
+    fi
     systemctl enable pisugar-server 2>/dev/null || true
     systemctl start pisugar-server 2>/dev/null || true
   else
-    echo "WARNING: PiSugar install failed. You can run it later manually."
+    echo "WARNING: PiSugar install failed or was cancelled. You can run it later:"
+    echo "  curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh"
   fi
+  rm -f "$PISUGAR_TMP"
 }
 
 install_pwnagotchi_bridge() {

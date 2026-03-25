@@ -36,6 +36,28 @@ except ImportError:
     EPDButtonListener = None
     PAGE_MAIN, PAGE_NETWORK, PAGE_VULN, PAGE_DISCOVERED, PAGE_ADVANCED, PAGE_TRAFFIC = 0, 1, 2, 3, 4, 5
 
+# Display HAT Mini: A=menu, B=select/back, X=up, Y=down
+try:
+    from displayhatmini_buttons import (
+        DisplayHATMiniButtonListener,
+        EVENT_MENU_TOGGLE,
+        EVENT_UP,
+        EVENT_DOWN,
+        EVENT_SELECT,
+        EVENT_BACK,
+    )
+    from displayhatmini_menu import (
+        build_flat_entries,
+        get_selectable_count,
+        cursor_to_line_index,
+        line_index_to_cursor,
+        apply_select,
+    )
+except ImportError:
+    DisplayHATMiniButtonListener = None
+    EVENT_MENU_TOGGLE = EVENT_UP = EVENT_DOWN = EVENT_SELECT = EVENT_BACK = None
+    build_flat_entries = get_selectable_count = cursor_to_line_index = line_index_to_cursor = apply_select = None
+
 class Display:
     def __init__(self, shared_data):
         """Initialize the display and start the main image and shared data update threads."""
@@ -84,9 +106,17 @@ class Display:
         # y_stretch is no longer needed — scale_factor_y handles vertical spacing
         self.y_stretch = 1.0
 
-        # Hardware button support (2.7" HAT has KEY1-KEY4)
+        # Hardware button support: Display HAT Mini (A,B,X,Y) or 2.7" e-Paper (KEY1-KEY4)
         self.button_listener = None
-        if self.is_wide and EPDButtonListener is not None:
+        self.dhm_listener = None
+        self.menu_visible = False
+        self.menu_cursor = 0
+        self.menu_scroll = 0
+        epd_type = self.config.get("epd_type", "")
+        if epd_type == "displayhatmini" and DisplayHATMiniButtonListener is not None:
+            self.dhm_listener = DisplayHATMiniButtonListener(shared_data)
+            self.dhm_listener.start()
+        elif self.is_wide and EPDButtonListener is not None:
             self.button_listener = EPDButtonListener(shared_data)
             self.button_listener.start()
 
@@ -698,6 +728,43 @@ class Display:
             logger.error(f"Error checking USB connection status: {e}")
             return False
 
+    def _render_settings_menu(self, image, draw):
+        """Draw Display HAT Mini settings menu with scroll and cursor."""
+        if build_flat_entries is None:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        entries = build_flat_entries(self.shared_data)
+        selectable = get_selectable_count(entries)
+        if selectable == 0:
+            return
+        self.menu_cursor = max(0, min(self.menu_cursor, selectable - 1))
+        line_index = cursor_to_line_index(entries, self.menu_cursor)
+        line_height = 14
+        lines_visible = max(1, (H - 4) // line_height)
+        # Keep cursor in view
+        if self.menu_scroll > line_index:
+            self.menu_scroll = line_index
+        if self.menu_scroll + lines_visible <= line_index:
+            self.menu_scroll = line_index - lines_visible + 1
+        try:
+            font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        except Exception:
+            font = ImageDraw.ImageFont.load_default()
+        y = 2
+        for i in range(self.menu_scroll, min(self.menu_scroll + lines_visible, len(entries))):
+            text, is_header, item = entries[i]
+            if is_header:
+                draw.text((2, y), text[:42], font=font, fill=0)
+            else:
+                highlight = (i == line_index)
+                if highlight:
+                    draw.rectangle((0, y - 1, W - 1, y + line_height), fill=0)
+                    draw.text((2, y), text[:42], font=font, fill=255)
+                else:
+                    draw.text((2, y), text[:42], font=font, fill=0)
+            y += line_height
+
     def _sleep_interruptible(self, current_page):
         """Sleep for screen_delay but wake early if button changes the page."""
         if not self.button_listener:
@@ -1218,6 +1285,50 @@ class Display:
                 image = Image.new('1', (self.shared_data.width, self.shared_data.height))
                 draw = ImageDraw.Draw(image)
                 draw.rectangle((0, 0, self.shared_data.width, self.shared_data.height), fill=255)
+
+                # Display HAT Mini: A=menu toggle, B=select/back, X=up, Y=down
+                if self.dhm_listener and self.dhm_listener.available:
+                    while True:
+                        ev = self.dhm_listener.get_event()
+                        if ev is None:
+                            break
+                        if ev == EVENT_MENU_TOGGLE:
+                            if build_flat_entries is not None:
+                                self.menu_visible = not self.menu_visible
+                        elif ev == EVENT_BACK:
+                            self.menu_visible = False
+                        elif ev == EVENT_UP and self.menu_visible:
+                            entries = build_flat_entries(self.shared_data) if build_flat_entries else []
+                            sel = get_selectable_count(entries) if entries else 0
+                            if sel:
+                                self.menu_cursor = max(0, self.menu_cursor - 1)
+                        elif ev == EVENT_DOWN and self.menu_visible:
+                            entries = build_flat_entries(self.shared_data) if build_flat_entries else []
+                            sel = get_selectable_count(entries) if entries else 0
+                            if sel:
+                                self.menu_cursor = min(sel - 1, self.menu_cursor + 1)
+                        elif ev == EVENT_SELECT and self.menu_visible and apply_select is not None:
+                            entries = build_flat_entries(self.shared_data) if build_flat_entries else []
+                            line_idx = cursor_to_line_index(entries, self.menu_cursor) if entries else 0
+                            if line_idx < len(entries):
+                                _, _, item = entries[line_idx]
+                                if item:
+                                    apply_select(self.shared_data, item)
+
+                    if self.menu_visible:
+                        self._render_settings_menu(image, draw)
+                        if self.screen_reversed:
+                            image = image.transpose(Image.Transpose.ROTATE_180)
+                        self.epd_helper.display_partial(image)
+                        self.epd_helper.display_partial(image)
+                        if self.web_screen_reversed:
+                            image = image.transpose(Image.Transpose.ROTATE_180)
+                        with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
+                            image.save(img_file)
+                            img_file.flush()
+                            os.fsync(img_file.fileno())
+                        time.sleep(self.shared_data.screen_delay)
+                        continue
 
                 # Check if button listener wants a different page
                 current_page = PAGE_MAIN
