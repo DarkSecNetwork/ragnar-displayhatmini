@@ -65,6 +65,8 @@ sudo reboot
 
 ## Buttons and settings menu
 
+Full reference: **[Ragnar/MENU_BUTTONS.md](../Ragnar/MENU_BUTTONS.md)** (button map, env vars, code layout, troubleshooting).
+
 When using Display HAT Mini (Pimoroni-style 4 buttons), the following mapping is used in the Ragnar UI:
 
 | Button | Action |
@@ -79,6 +81,10 @@ The settings menu includes sections: Network (WiFi, Ethernet, Bluetooth), WiFi A
 
 Button GPIO pins (BCM): A=5, B=6, X=16, Y=24. If your HAT uses different pins, edit `Ragnar/displayhatmini_buttons.py` and adjust `PIN_A`, `PIN_B`, `PIN_X`, `PIN_Y`.
 
+**Startup delay:** Buttons attach after **2.5 s** by default so SPI/display init can finish first. Override with `RAGNAR_DHM_BUTTON_DELAY` (seconds, e.g. `0` for immediate).
+
+**Disable buttons (debug):** Set `RAGNAR_SKIP_DHM_BUTTONS=1` in the systemd environment for `ragnar.service` if you need to rule out gpiozero vs display/GPIO issues.
+
 ## Boot splash and on-screen logs
 
 On Display HAT Mini the installer runs a short splash before Ragnar: “Booting…”, “Starting Ragnar…”, “Loading…”. Then Ragnar shows “Loading Ragnar…” until the first full UI frame. After the splash, the display shows **Loading Ragnar…** and the last 6 lines of the Ragnar service log, updating every 2 s until the UI is ready, so you can see startup progress and errors on the HAT.
@@ -88,3 +94,24 @@ On Display HAT Mini the installer runs a short splash before Ragnar: “Booting�
 - Enable SPI: `sudo raspi-config nonint do_spi 0` then reboot.
 - Test: `python3 -c "from waveshare_epd import displayhatmini; e=displayhatmini.EPD(); e.init(); e.Clear(255)"`
 - If the installer didn’t run: ensure `shared.py` is patched so buffer validation is skipped for displayhatmini (re-run installer or see main README).
+
+### PiSugar stacked — blank display
+
+PiSugar sits on the GPIO header and shares power and sometimes I2C traffic with the Pi. A **blank Display HAT Mini** after stacking is often one of:
+
+1. **GPIO library conflict (fixed in current installer):** An older generated `displayhatmini.py` used **RPi.GPIO** for backlight on BCM **13** while **st7789** also drives `backlight=13`, and the menu uses **gpiozero** on pins 5, 6, 16, 24. Mixing **RPi.GPIO** and **gpiozero** can leave GPIO in a bad state. **Fix:** re-run the installer so the generated driver uses **only** st7789 for backlight (no RPi.GPIO in `displayhatmini.py`):
+
+   ```bash
+   wget https://raw.githubusercontent.com/DarkSecNetwork/ragnar-displayhatmini/main/install_ragnar.sh
+   sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
+   ```
+
+2. **Mechanical / power:** Reseat the HAT stack; use a **5 V supply** that can handle Pi + HAT + PiSugar (undersized PSU can brown out the display).
+
+3. **Isolate buttons:** To test whether gpiozero is involved, add to `ragnar.service` under `[Service]`:
+
+   ```ini
+   Environment=RAGNAR_SKIP_DHM_BUTTONS=1
+   ```
+
+   Then `sudo systemctl daemon-reload && sudo systemctl restart ragnar`. If the picture returns, keep the new driver from (1) and remove the env var when you want the menu buttons again.

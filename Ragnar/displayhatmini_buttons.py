@@ -1,8 +1,12 @@
 # displayhatmini_buttons.py - Button support for Display HAT Mini (A, B, X, Y)
 # Pimoroni Display HAT Mini: A=5, B=6, X=16, Y=24 (GPIO BCM)
 # A = Toggle menu, B = Select (short) / Back (long or double-tap), X = Up, Y = Down
+#
+# RAGNAR_SKIP_DHM_BUTTONS=1 — skip gpiozero buttons (debug / PiSugar GPIO conflicts).
+# RAGNAR_DHM_BUTTON_DELAY — seconds to wait before attaching buttons (default 2.5).
 
 import logging
+import os
 import threading
 import time
 import queue
@@ -41,6 +45,24 @@ class DisplayHATMiniButtonListener:
         self._stop_hold = threading.Event()
 
     def start(self):
+        skip = os.environ.get("RAGNAR_SKIP_DHM_BUTTONS", "").strip().lower()
+        if skip in ("1", "true", "yes", "on"):
+            logger.info("Display HAT Mini buttons disabled (RAGNAR_SKIP_DHM_BUTTONS)")
+            return
+        try:
+            delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "2.5"))
+        except ValueError:
+            delay = 2.5
+        delay = max(0.0, delay)
+
+        def _run():
+            if delay > 0:
+                time.sleep(delay)
+            self._start_impl()
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _start_impl(self):
         try:
             from gpiozero import Button
             a = Button(PIN_A, pull_up=True, bounce_time=0.15)

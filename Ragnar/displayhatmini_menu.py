@@ -1,6 +1,7 @@
 # displayhatmini_menu.py - Settings menu structure and logic for Display HAT Mini
 # Used when A opens menu; X/Y navigate, B select, long/double B back.
 
+import glob
 import os
 import subprocess
 import threading
@@ -124,6 +125,12 @@ def _get_value_from_system(shared_data, key):
     if key == "openai_api_key":
         v = cfg.get("openai_api_key", "") or ""
         return "***" if len(v) > 4 else "-"
+    if key == "wifi_password":
+        v = cfg.get("wifi_password", "") or ""
+        return "********" if v else "-"
+    if key == "pin_code":
+        v = cfg.get("pin_code", "") or ""
+        return "****" if v else "-"
     if key == "ai_model":
         return cfg.get("openai_model", "gpt-4o-mini")
     if key == "ai_speed":
@@ -194,6 +201,14 @@ def _get_value_from_system(shared_data, key):
         return str(cfg.get("auto_lock", 2)) + " min"
     if key == "fps":
         return str(cfg.get("fps", 1)) + " FPS"
+    if key == "handshake_count":
+        datadir = getattr(shared_data, "datadir", None) or "/home/ragnar/Ragnar/data"
+        hs = os.path.join(datadir, "handshakes")
+        try:
+            n = len(glob.glob(os.path.join(hs, "*.cap")) + glob.glob(os.path.join(hs, "*.pcap")))
+            return str(n)
+        except Exception:
+            return "-"
     try:
         return cfg.get(key, "-")
     except Exception:

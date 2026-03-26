@@ -889,36 +889,15 @@ except ImportError:
         ST7789_AVAILABLE = False
         print("ERROR: st7789 library not found. Install with: pip3 install st7789", file=sys.stderr)
 
-# Try to import GPIO for backlight control (optional)
-try:
-    import RPi.GPIO as GPIO
-    GPIO_AVAILABLE = True
-except ImportError:
-    GPIO_AVAILABLE = False
+# Do NOT use RPi.GPIO here for backlight. Mixing RPi.GPIO with gpiozero (menu buttons A/B/X/Y)
+# breaks GPIO on many setups (PiSugar stacked, Bookworm). The st7789 driver controls backlight=13.
 
 class EPD:
     width = 320
     height = 240
     def __init__(self):
         self.disp = None
-        self.backlight_pin = 13
-        self._gpio_initialized = False
-        
-    def _ensure_backlight(self):
-        """Ensure backlight is on (st7789 should handle this, but double-check)"""
-        if not GPIO_AVAILABLE:
-            return
-        try:
-            if not self._gpio_initialized:
-                if GPIO.getmode() is None:
-                    GPIO.setmode(GPIO.BCM)
-                GPIO.setup(self.backlight_pin, GPIO.OUT)
-                self._gpio_initialized = True
-            GPIO.output(self.backlight_pin, GPIO.HIGH)  # Turn on backlight
-        except Exception as e:
-            # Non-fatal - st7789 library should handle backlight
-            pass
-    
+
     def init(self):
         if not ST7789_AVAILABLE:
             print("ERROR: st7789 library not available", file=sys.stderr)
@@ -944,8 +923,6 @@ class EPD:
                 self.disp.begin()
                 self.width = $DHAT_LOGICAL_W
                 self.height = $DHAT_LOGICAL_H
-                # Ensure backlight is on (redundant but safe)
-                self._ensure_backlight()
                 print("Display HAT Mini initialized successfully", file=sys.stderr)
             except Exception as e:
                 print(f"ERROR: Failed to initialize display: {e}", file=sys.stderr)
@@ -993,19 +970,14 @@ class EPD:
             print(f"ERROR: Clear failed: {e}", file=sys.stderr)
     
     def sleep(self):
-        """Turn off backlight (optional - for power saving)"""
-        if GPIO_AVAILABLE and self._gpio_initialized:
-            try:
-                GPIO.output(self.backlight_pin, GPIO.LOW)
-            except:
-                pass
-    
+        """Optional power save — avoid RPi.GPIO; st7789 may expose backlight API on some versions."""
+        pass
+
     def module_exit(self):
         """Cleanup"""
         try:
-            if self.disp:
-                self.sleep()
-        except:
+            self.disp = None
+        except Exception:
             pass
     
     def Dev_exit(self):

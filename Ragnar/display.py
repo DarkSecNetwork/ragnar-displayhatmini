@@ -50,13 +50,12 @@ try:
         build_flat_entries,
         get_selectable_count,
         cursor_to_line_index,
-        line_index_to_cursor,
         apply_select,
     )
 except ImportError:
     DisplayHATMiniButtonListener = None
     EVENT_MENU_TOGGLE = EVENT_UP = EVENT_DOWN = EVENT_SELECT = EVENT_BACK = None
-    build_flat_entries = get_selectable_count = cursor_to_line_index = line_index_to_cursor = apply_select = None
+    build_flat_entries = get_selectable_count = cursor_to_line_index = apply_select = None
 
 class Display:
     def __init__(self, shared_data):
@@ -1294,7 +1293,12 @@ class Display:
                             break
                         if ev == EVENT_MENU_TOGGLE:
                             if build_flat_entries is not None:
+                                was_visible = self.menu_visible
                                 self.menu_visible = not self.menu_visible
+                                # Fresh scroll/cursor when opening so navigation and highlight stay in sync
+                                if self.menu_visible and not was_visible:
+                                    self.menu_scroll = 0
+                                    self.menu_cursor = 0
                         elif ev == EVENT_BACK:
                             self.menu_visible = False
                         elif ev == EVENT_UP and self.menu_visible:
@@ -1327,7 +1331,9 @@ class Display:
                             image.save(img_file)
                             img_file.flush()
                             os.fsync(img_file.fileno())
-                        time.sleep(self.shared_data.screen_delay)
+                        # Snappier menu UX than full e-paper delay (Display HAT Mini is LCD)
+                        _delay = getattr(self.shared_data, "screen_delay", 1.0) or 1.0
+                        time.sleep(min(0.2, float(_delay)))
                         continue
 
                 # Check if button listener wants a different page

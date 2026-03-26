@@ -30,6 +30,7 @@ Save the output (or the last 50 lines before the crash) so you can see the Pytho
 | "Buffer size mismatch" / EPD init fails | Display HAT Mini buffer validation | Re-run installer (it patches shared.py to skip this for displayhatmini) |
 | Out of memory / killed | Pi Zero 2 W low RAM | Close other apps; ensure only one Ragnar instance; check `free -m` |
 | Display / GPIO errors | SPI not enabled or wrong driver | `sudo raspi-config nonint do_spi 0` then reboot |
+| Blank Display HAT Mini with **PiSugar** stacked | GPIO conflict: old driver used RPi.GPIO on backlight while buttons use gpiozero; or I2C/busy boot | Re-run [install_ragnar.sh](https://raw.githubusercontent.com/DarkSecNetwork/ragnar-displayhatmini/main/install_ragnar.sh) so `waveshare_epd/displayhatmini.py` is regenerated **without** RPi.GPIO. Optionally set `RAGNAR_SKIP_DHM_BUTTONS=1` in the service env to test display-only; see [Display HAT Mini – PiSugar](DISPLAY_HAT_MINI.md#pisugar-stacked-blank-display) |
 | `Invalid wheel filename (invalid version): 'paramiko-0.9_ivysaur'` | Bad cached wheel (e.g. from Pwnagotchi) | `pip3 cache purge` then re-run installer, or run installer (it uses `--no-cache-dir`) |
 | `types-flask-migrate requires Flask-SQLAlchemy>=3.0.1` | Optional type stub conflict | Harmless; installer now installs `Flask-SQLAlchemy>=3.0.1`. Ignore or `pip3 install --break-system-packages "Flask-SQLAlchemy>=3.0.1"` |
 
