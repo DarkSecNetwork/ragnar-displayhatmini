@@ -887,9 +887,9 @@ fi
 pip3 install --break-system-packages --ignore-installed --no-cache-dir paramiko st7789 luma.lcd luma.core pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" openai "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
-  echo "Installing Display HAT Mini dependencies (gpiod, gpiodevice)..."
-  apt install -y python3-gpiod 2>/dev/null || true
-  pip3 install --break-system-packages gpiod gpiodevice 2>&1 | grep -v "DEPRECATION:" || true
+  echo "Installing Display HAT Mini dependencies (gpiod, gpiodevice, gpiozero, lgpio)..."
+  apt install -y python3-gpiod python3-lgpio 2>/dev/null || true
+  pip3 install --break-system-packages gpiod gpiodevice "gpiozero>=2.0" 2>&1 | grep -v "DEPRECATION:" || true
   echo "Creating Display HAT Mini compatibility driver..."
   WSPATH=$(python3 - <<'PY'
 import importlib.util
@@ -1386,7 +1386,7 @@ sudo systemctl status ragnar --no-pager -l | sed -n '1,20p'
 
 echo
 echo "=== 2) Service env/startup guards ==="
-sudo systemctl cat ragnar | sed -n '/^\[Service\]/,/^\[/p' | sed '/^\[$/d' | grep -E "ExecStartPre|Environment=RAGNAR_DHM_BUTTON_DELAY|ExecStart=" || true
+sudo systemctl cat ragnar | sed -n '/^\[Service\]/,/^\[/p' | sed '/^\[$/d' | grep -E "ExecStartPre|Environment=RAGNAR_|ExecStart=" || true
 
 echo
 echo "=== 3) waveshare displayhatmini.py sanity ==="
@@ -1431,8 +1431,26 @@ else
 fi
 
 echo
+echo "=== 4b) gpiozero / lgpio (menu buttons) ==="
+python3 - <<'PY'
+try:
+    import lgpio  # noqa: F401
+    print("OK: lgpio module (apt: python3-lgpio)")
+except ImportError:
+    print("WARN: lgpio not importable — run: sudo apt install -y python3-lgpio")
+try:
+    from gpiozero.pins.lgpio import LGPIOFactory
+    from gpiozero import Device
+    Device.pin_factory = LGPIOFactory()
+    print("OK: gpiozero LGPIOFactory")
+except Exception as e:
+    print("WARN: LGPIOFactory:", e)
+PY
+
+echo
 echo "=== 5) Runtime import and panel init test ==="
 python3 - <<'PY'
+import errno
 try:
     from waveshare_epd import displayhatmini
     epd = displayhatmini.EPD()
@@ -1442,6 +1460,12 @@ try:
         raise SystemExit(3)
     epd.Clear(255)
     print("OK: panel clear test")
+except OSError as ex:
+    if getattr(ex, "errno", None) in (errno.EBUSY, errno.EAGAIN, 16):
+        print("SKIP: display GPIO busy (ragnar.service is using the panel). This is expected while Ragnar runs.")
+        raise SystemExit(0)
+    print("FAIL:", ex)
+    raise
 except Exception as ex:
     print("FAIL:", ex)
     raise
@@ -1492,6 +1516,7 @@ StandardError=journal
 # Environment
 Environment=PYTHONUNBUFFERED=1
 Environment=RAGNAR_DHM_BUTTON_DELAY=2.5
+Environment=RAGNAR_GPIOZERO_FACTORY=lgpio
 $BOOT_SPLASH_ENV
 # Timeouts (start can be slow: splash + deferred init + display)
 TimeoutStartSec=120

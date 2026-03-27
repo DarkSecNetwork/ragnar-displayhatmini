@@ -4,6 +4,7 @@
 #
 # RAGNAR_SKIP_DHM_BUTTONS=1 — skip gpiozero buttons (debug / PiSugar GPIO conflicts).
 # RAGNAR_DHM_BUTTON_DELAY — seconds to wait before attaching buttons (default 2.5).
+# RAGNAR_GPIOZERO_FACTORY — force pin factory: lgpio | native | rpigpio (Bookworm/Pi 5: use lgpio).
 
 import logging
 import os
@@ -12,6 +13,51 @@ import time
 import queue
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_gpiozero_pin_factory():
+    """st7789 uses gpiodevice/gpiod; gpiozero must use lgpio or native on Bookworm, not stale RPi.GPIO defaults."""
+    try:
+        from gpiozero import Device
+    except ImportError:
+        return False
+    forced = os.environ.get("RAGNAR_GPIOZERO_FACTORY", "").strip().lower()
+    candidates = []
+    if forced in ("lgpio", "native", "rpigpio"):
+        candidates = [forced]
+    else:
+        candidates = ["lgpio", "native", "rpigpio"]
+    for name in candidates:
+        try:
+            if name == "lgpio":
+                from gpiozero.pins.lgpio import LGPIOFactory
+
+                Device.pin_factory = LGPIOFactory()
+            elif name == "native":
+                from gpiozero.pins.native import NativeFactory
+
+                Device.pin_factory = NativeFactory()
+            elif name == "rpigpio":
+                from gpiozero.pins.rpigpio import RPiGPIOFactory
+
+                Device.pin_factory = RPiGPIOFactory()
+            else:
+                continue
+            fac = Device.pin_factory
+            logger.info(
+                "gpiozero pin factory: %s (%s)",
+                name,
+                fac.__class__.__name__ if fac is not None else "None",
+            )
+            return True
+        except Exception as e:
+            logger.debug("gpiozero factory %s: %s", name, e)
+    logger.warning(
+        "No working gpiozero hardware pin factory (tried %s); menu buttons may not respond. "
+        "Install python3-lgpio or set RAGNAR_GPIOZERO_FACTORY=lgpio",
+        candidates,
+    )
+    return False
 
 # GPIO pins for Pimoroni Display HAT Mini (4 tactile buttons)
 PIN_A = 5   # Toggle menu
@@ -64,6 +110,7 @@ class DisplayHATMiniButtonListener:
 
     def _start_impl(self):
         try:
+            _ensure_gpiozero_pin_factory()
             from gpiozero import Button
             a = Button(PIN_A, pull_up=True, bounce_time=0.15)
             b = Button(PIN_B, pull_up=True, bounce_time=0.15)
