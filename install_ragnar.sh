@@ -183,20 +183,65 @@ configure_static_ip() {
     echo "Skipping static IP configuration."
     return 0
   fi
-  
-  # Configure static IP in dhcpcd.conf
-  DHCPCD_CONF="/etc/dhcpcd.conf"
-  
-  # Remove existing configuration for this interface if present
-  if [ -f "$DHCPCD_CONF" ]; then
-    # Create backup
-    cp "$DHCPCD_CONF" "${DHCPCD_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
-    # Remove old config for this interface
-    sed -i "/^interface $ACTIVE_INTERFACE$/,/^$/d" "$DHCPCD_CONF"
+
+  # Raspberry Pi OS Bookworm often uses NetworkManager for wlan0/eth0. dhcpcd.conf alone is IGNORED then.
+  NM_CONN=""
+  if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    NM_CONN=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="$ACTIVE_INTERFACE" '$2==d {print $1; exit}')
+    if [ -z "$NM_CONN" ]; then
+      NM_CONN=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | awk -F: -v d="$ACTIVE_INTERFACE" '$2==d {print $1; exit}')
+    fi
   fi
-  
-  # Add new configuration
-  cat >> "$DHCPCD_CONF" <<EOF
+
+  if [ -n "$NM_CONN" ]; then
+    echo ""
+    echo "Using NetworkManager (Bookworm default) — applying static IP via nmcli."
+    echo "Connection: $NM_CONN  Device: $ACTIVE_INTERFACE"
+    DNS_COMMA=$(echo "$STATIC_DNS" | tr ' ' ',')
+    if nmcli connection modify "$NM_CONN" \
+      ipv4.method manual \
+      ipv4.addresses "${STATIC_IP}/24" \
+      ipv4.gateway "$STATIC_GATEWAY" \
+      ipv4.dns "$DNS_COMMA" \
+      ipv4.ignore-auto-dns yes 2>/dev/null; then
+      echo "✓ nmcli: static IPv4 set on \"$NM_CONN\""
+    else
+      echo "WARNING: nmcli modify failed; falling back to dhcpcd.conf"
+      NM_CONN=""
+    fi
+    if [ -n "$NM_CONN" ]; then
+      nmcli connection up "$NM_CONN" 2>/dev/null || true
+      sleep 2
+      NEW_IP=$(ip -4 -br addr show "$ACTIVE_INTERFACE" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
+      if [ "$NEW_IP" = "$STATIC_IP" ]; then
+        echo "✓ Address active on $ACTIVE_INTERFACE: $NEW_IP"
+      else
+        echo "⚠ Current IPv4 on $ACTIVE_INTERFACE: ${NEW_IP:-unknown} (expected $STATIC_IP) — reboot if needed."
+      fi
+      echo ""
+      echo "After reboot, connect with: ssh ragnar@$STATIC_IP"
+      echo "If SSH still fails, use HDMI+keyboard or Ethernet and run: nmcli connection show \"$NM_CONN\""
+      return 0
+    fi
+  else
+    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+      echo ""
+      echo "WARNING: NetworkManager is active but no nmcli connection was found for $ACTIVE_INTERFACE."
+      echo "Falling back to dhcpcd.conf (may NOT apply on Bookworm — prefer fixing NetworkManager)."
+    fi
+  fi
+
+  # Fallback: dhcpcd (older Pi OS / images without NM on this interface)
+  DHCPCD_CONF="/etc/dhcpcd.conf"
+
+  if [ ! -f "$DHCPCD_CONF" ]; then
+    echo "WARNING: $DHCPCD_CONF not found and NetworkManager path not used. Static IP may not persist."
+  fi
+
+  if [ -f "$DHCPCD_CONF" ]; then
+    cp "$DHCPCD_CONF" "${DHCPCD_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
+    sed -i "/^interface $ACTIVE_INTERFACE$/,/^$/d" "$DHCPCD_CONF"
+    cat >> "$DHCPCD_CONF" <<EOF
 
 # Static IP configuration for $ACTIVE_INTERFACE (configured by Ragnar installer)
 interface $ACTIVE_INTERFACE
@@ -204,27 +249,24 @@ static ip_address=$STATIC_IP_WITH_MASK
 static routers=$STATIC_GATEWAY
 static domain_name_servers=$STATIC_DNS
 EOF
-  
-  echo "Static IP configuration added to $DHCPCD_CONF"
+    echo "Static IP configuration added to $DHCPCD_CONF"
+  fi
+
   echo ""
-  echo "NOTE: Static IP will take effect after reboot."
-  echo "      Until then, you may need to use the current DHCP IP."
-  echo ""
+  echo "NOTE: With dhcpcd fallback, static IP often requires a reboot on Pi OS."
   echo "After reboot, connect with: ssh ragnar@$STATIC_IP"
-  
-  # Also try to apply immediately (may require network restart)
+
   echo ""
-  read -p "Apply static IP now (requires network restart)? (y/N): " APPLY_NOW
+  read -p "Apply static IP now (restart dhcpcd)? (y/N): " APPLY_NOW
   if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
-    echo "Applying static IP configuration..."
+    echo "Applying..."
     systemctl restart dhcpcd 2>/dev/null || systemctl restart networking 2>/dev/null || true
     sleep 3
     NEW_IP=$(ip addr show "$ACTIVE_INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     if [ "$NEW_IP" = "$STATIC_IP" ]; then
       echo "✓ Static IP applied successfully: $NEW_IP"
     else
-      echo "⚠ IP may not have changed yet. Current IP: $NEW_IP"
-      echo "  Static IP will be active after reboot."
+      echo "⚠ Current IP: ${NEW_IP:-none} — reboot may be required for dhcpcd."
     fi
   fi
 }
