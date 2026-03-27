@@ -525,7 +525,7 @@ PYDIAG
       sed -i 's/cryptography.*/cryptography<45,>=41.0.5/' requirements.txt 2>/dev/null || true
     fi
     pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
-    pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 RPi.GPIO 2>/dev/null || true
+    pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 2>/dev/null || true
     fixes_applied=$((fixes_applied + 1))
   fi
   
@@ -668,7 +668,7 @@ auto_fix_service_errors() {
       sed -i 's/^pisugar$/pisugar>=0.1.1/' requirements.txt 2>/dev/null || true
     fi
     pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
-      pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 RPi.GPIO 2>/dev/null || true
+      pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 2>/dev/null || true
     fi
     
     if echo "$error_log" | grep -qi "PermissionError\|Permission denied"; then
@@ -742,7 +742,7 @@ echo "Installing base packages..."
 apt install -y git wget curl lsof sudo build-essential python3 python3-pip python3-dev python3-pil python3-numpy python3-pandas python3-spidev libjpeg-dev zlib1g-dev libpng-dev libffi-dev libssl-dev libgpiod-dev libcap-dev libi2c-dev libopenjp2-7 libopenblas-dev libblas-dev liblapack-dev nmap bluez bluez-tools bridge-utils network-manager i2c-tools rfkill || true
 
 echo "Installing Python packages..."
-  pip3 install --break-system-packages --ignore-installed --no-cache-dir typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai RPi.GPIO "cryptography<45" || true
+  pip3 install --break-system-packages --ignore-installed --no-cache-dir typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai "cryptography<45" || true
 
 echo "Enabling SPI and I2C..."
 if command -v raspi-config >/dev/null 2>&1; then
@@ -842,7 +842,7 @@ if [ -f requirements.txt ]; then
   fi
 fi
 # Install core packages (--no-cache-dir avoids invalid cached wheels e.g. paramiko-0.9_ivysaur from Pwnagotchi)
-pip3 install --break-system-packages --ignore-installed --no-cache-dir paramiko st7789 luma.lcd luma.core pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" openai RPi.GPIO "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
+pip3 install --break-system-packages --ignore-installed --no-cache-dir paramiko st7789 luma.lcd luma.core pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" openai "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing Display HAT Mini dependencies (gpiod, gpiodevice)..."
@@ -1329,6 +1329,103 @@ else
   BOOT_SPLASH_ENV=""
 fi
 
+# Install post-reboot verification script for Display HAT Mini
+if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
+  cat > "$RAGNAR_DIR/scripts/verify_displayhatmini_boot.sh" <<'VERIFYSH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== Display HAT Mini post-reboot verification ==="
+echo
+echo "=== 1) Service status ==="
+sudo systemctl is-enabled ragnar || true
+sudo systemctl is-active ragnar || true
+sudo systemctl status ragnar --no-pager -l | sed -n '1,20p'
+
+echo
+echo "=== 2) Service env/startup guards ==="
+sudo systemctl cat ragnar | sed -n '/^\[Service\]/,/^\[/p' | sed '/^\[$/d' | grep -E "ExecStartPre|Environment=RAGNAR_DHM_BUTTON_DELAY|ExecStart=" || true
+
+echo
+echo "=== 3) waveshare displayhatmini.py sanity ==="
+python3 - <<'PY'
+import importlib.util
+import pathlib
+
+spec = importlib.util.find_spec("waveshare_epd")
+if not spec or not spec.submodule_search_locations:
+    print("FAIL: waveshare_epd not found")
+    raise SystemExit(1)
+
+p = pathlib.Path(spec.submodule_search_locations[0]) / "displayhatmini.py"
+print("driver_path:", p)
+if not p.exists():
+    print("FAIL: displayhatmini.py missing")
+    raise SystemExit(1)
+
+t = p.read_text(errors="ignore")
+checks = {
+    "st7789 import": ("import st7789" in t) or ("import ST7789 as st7789" in t),
+    "no RPi.GPIO import": ("import RPi.GPIO" not in t),
+    "backlight=13": ("backlight=13" in t),
+    "dc=9": ("dc=9" in t),
+    "cs=1": ("cs=1" in t),
+    "port=0": ("port=0" in t),
+}
+ok = True
+for key, val in checks.items():
+    print(f"{'OK' if val else 'FAIL'}: {key}")
+    ok = ok and val
+if not ok:
+    raise SystemExit(2)
+PY
+
+echo
+echo "=== 4) Ragnar button pin mapping sanity ==="
+if [ -f /home/ragnar/Ragnar/displayhatmini_buttons.py ]; then
+  grep -nE "PIN_A|PIN_B|PIN_X|PIN_Y" /home/ragnar/Ragnar/displayhatmini_buttons.py || true
+else
+  echo "WARN: /home/ragnar/Ragnar/displayhatmini_buttons.py not found"
+fi
+
+echo
+echo "=== 5) Runtime import and panel init test ==="
+python3 - <<'PY'
+try:
+    from waveshare_epd import displayhatmini
+    epd = displayhatmini.EPD()
+    result = epd.init()
+    print("init_return:", result)
+    if result != 0:
+        raise SystemExit(3)
+    epd.Clear(255)
+    print("OK: panel clear test")
+except Exception as ex:
+    print("FAIL:", ex)
+    raise
+PY
+
+echo
+echo "=== 6) Recent boot logs (Ragnar) ==="
+sudo journalctl -u ragnar -b -n 120 --no-pager | tail -n 120
+
+echo
+echo "=== 7) GPIO users (detect conflicts) ==="
+sudo lsof /dev/gpiochip* 2>/dev/null || echo "No gpiochip users shown (normal sometimes)"
+
+echo
+echo "=== DONE ==="
+echo "If everything is OK above, setup is healthy."
+echo "If screen is still black, test with menu disabled:"
+echo "  sudo systemctl edit ragnar"
+echo "  [Service]"
+echo "  Environment=RAGNAR_SKIP_DHM_BUTTONS=1"
+echo "Then run:"
+echo "  sudo systemctl daemon-reload && sudo systemctl restart ragnar"
+VERIFYSH
+  chmod +x "$RAGNAR_DIR/scripts/verify_displayhatmini_boot.sh"
+fi
+
 echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
@@ -1352,6 +1449,7 @@ StandardOutput=journal
 StandardError=journal
 # Environment
 Environment=PYTHONUNBUFFERED=1
+Environment=RAGNAR_DHM_BUTTON_DELAY=2.5
 $BOOT_SPLASH_ENV
 # Timeouts (start can be slow: splash + deferred init + display)
 TimeoutStartSec=120
@@ -1491,15 +1589,21 @@ echo " INSTALL COMPLETE"
 echo " Selected mode: $DISPLAY_MODE"
 echo " Display setting: $SELECTED_EPD"
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
+  if [ "${DISPLAYHATMINI_REF_W}" = "240" ] && [ "${DISPLAYHATMINI_REF_H}" = "320" ]; then
+    DISPLAY_ROT_LABEL="Portrait (240x320 logical, ST7789 rotation 0)"
+  else
+    DISPLAY_ROT_LABEL="Landscape (320x240 logical, ST7789 rotation 180)"
+  fi
   echo " Pins used: SPI port=0, cs=1, dc=9, backlight=13"
-  echo " Resolution: 320x240"
-  echo " Rotation: 180"
+  echo " Resolution: ${DISPLAYHATMINI_REF_W}x${DISPLAYHATMINI_REF_H} (logical)"
+  echo " Orientation: ${DISPLAY_ROT_LABEL}"
   echo " SPI speed: $DISPLAY_SPI_HZ"
   echo ""
   echo " If display is blank, check:"
   echo "   1. SPI enabled: sudo raspi-config nonint do_spi 0"
   echo "   2. Service logs: journalctl -u ragnar -n 50 --no-pager"
   echo "   3. Test display: python3 -c 'from waveshare_epd import displayhatmini; epd = displayhatmini.EPD(); epd.init(); epd.Clear(255)'"
+  echo "   4. Run post-reboot verifier: sudo $RAGNAR_DIR/scripts/verify_displayhatmini_boot.sh"
 fi
 if [[ "$INSTALL_PWN" =~ ^[Yy]$ ]]; then
   echo " Pwnagotchi bridge: requested"
