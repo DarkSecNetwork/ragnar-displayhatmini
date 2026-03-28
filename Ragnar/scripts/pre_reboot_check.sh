@@ -70,7 +70,9 @@ SELFTEST="${RAGNAR_SCRIPTS}/ragnar_startup_selftest.py"
 if [[ ! -f "$SELFTEST" ]]; then
   fail "Missing script: $SELFTEST"
 fi
-if ! RAGNAR_DIR="$RAGNAR_DIR" /usr/bin/python3 "$SELFTEST"; then
+# Do not prefix RAGNAR_DIR=... here: RAGNAR_DIR is readonly above and bash errors on reassignment.
+# ragnar_startup_selftest.py defaults RAGNAR_DIR to /home/ragnar/Ragnar.
+if ! /usr/bin/python3 "$SELFTEST"; then
   fail "ragnar_startup_selftest.py reported errors (see stderr above)"
 fi
 pass "ragnar_startup_selftest.py OK"

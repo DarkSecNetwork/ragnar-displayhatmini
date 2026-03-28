@@ -4,6 +4,14 @@
 
 See **[REBOOT_AND_HEALTH.md](REBOOT_AND_HEALTH.md)** for `network-online.target` ordering, pre-reboot checks, and **`safe_reboot.sh`**.
 
+## SSH over USB (gadget / usb0)
+
+See **[USB_SSH_GADGET.md](USB_SSH_GADGET.md)** and run **`sudo /home/ragnar/Ragnar/scripts/check_usb_ssh.sh`** on the Pi.
+
+## Boot log on the Display HAT Mini
+
+See **[BOOT_DISPLAY.md](BOOT_DISPLAY.md)** (`ragnar-display.service` + `ragnar_boot_display.py`).
+
 ## Ragnar keeps crashing
 
 ### 1. Get the crash logs

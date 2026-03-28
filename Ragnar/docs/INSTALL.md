@@ -82,7 +82,7 @@ If you want to know exactly what runs when you execute `install_ragnar.sh`, here
 1. **Checks** — Ensures script is run with `sudo`.
 2. **Display selection** — You choose display type (1–10); for Display HAT Mini you choose Landscape or Portrait.
 3. **Optional features** — You choose whether to install Pwnagotchi bridge and PiSugar.
-4. **Static IP** — Optional. On **Pi OS Bookworm**, networking is usually **NetworkManager**: the installer applies static IPv4 with **`nmcli`** on the active connection. If that is not available, it falls back to **`/etc/dhcpcd.conf`** (ignored when NM manages the interface).
+4. **Static IP** — Optional. You choose the **interface**: **wlan0**, **eth0**, or **usb0** (USB Ethernet gadget for SSH from a PC). On **Pi OS Bookworm**, **NetworkManager** is used when available. **usb0** also enables **`dtoverlay=dwc2`** and **`modules-load=dwc2,g_ether`** in cmdline. See [USB_SSH_GADGET.md](USB_SSH_GADGET.md).
 5. **User** — Ensures user `ragnar` exists; creates `/home/ragnar` if needed.
 6. **Ragnar directory** — Removes any existing `/home/ragnar/Ragnar`. If the installer is run from this repo (directory containing **Ragnar/** with **Ragnar.py**), it copies that folder to `/home/ragnar/Ragnar`. Otherwise it clones [DarkSecNetwork/ragnar-displayhatmini](https://github.com/DarkSecNetwork/ragnar-displayhatmini) and uses its **Ragnar/** folder, or falls back to `https://github.com/PierreGode/Ragnar.git`.
 7. **Waveshare library** — Clones the Waveshare e-Paper repo and installs the RaspberryPi/JetsonNano Python package.

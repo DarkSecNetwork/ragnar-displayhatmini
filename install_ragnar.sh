@@ -10,6 +10,8 @@ USER_NAME="ragnar"
 HOME_DIR="/home/${USER_NAME}"
 RAGNAR_DIR="${HOME_DIR}/Ragnar"
 CONFIG_TXT="/boot/firmware/config.txt"
+# cmdline: Bookworm uses /boot/firmware/cmdline.txt (fallback /boot/cmdline.txt)
+CMDLINE_TXT="/boot/firmware/cmdline.txt"
 DISPLAY_SPI_HZ="60000000"
 SELECTED_EPD="epd2in13_V4"
 DISPLAY_MODE="epd"
@@ -96,95 +98,168 @@ ask_optional_features() {
   read -p "Install PiSugar battery support? (y/N): " INSTALL_PISUGAR
 }
 
+# USB gadget Ethernet (SSH over USB to PC): requires dwc2 + g_ether; interface usb0.
+ensure_usb_gadget_boot_config() {
+  echo ""
+  echo "========================================"
+  echo " USB Ethernet gadget (dwc2 + g_ether)"
+  echo "========================================"
+  local cl="$CMDLINE_TXT"
+  [ -f "$cl" ] || cl="/boot/cmdline.txt"
+  append_if_missing "dtoverlay=dwc2" "$CONFIG_TXT"
+  [ -f /boot/config.txt ] && [ "$CONFIG_TXT" != "/boot/config.txt" ] && append_if_missing "dtoverlay=dwc2" "/boot/config.txt" || true
+  if [ -f "$cl" ]; then
+    if ! tr -d '\n' <"$cl" | grep -q 'modules-load=dwc2,g_ether'; then
+      cp "$cl" "${cl}.backup.$(date +%Y%m%d_%H%M%S)"
+      # Single-line cmdline: append kernel module load for USB Ethernet gadget
+      sed -i "s/\$/ modules-load=dwc2,g_ether/" "$cl"
+      echo "✓ Appended modules-load=dwc2,g_ether to $cl"
+    else
+      echo "✓ $cl already contains modules-load=dwc2,g_ether"
+    fi
+  else
+    echo "WARNING: cmdline.txt not found ($CMDLINE_TXT or /boot/cmdline.txt). USB gadget may not load."
+  fi
+  echo "Use the Pi's USB DATA port with a data-capable cable. Reboot required before usb0 appears."
+}
+
 configure_static_ip() {
   echo
   echo "========================================"
   echo " Static IP Configuration"
   echo "========================================"
   echo
-  echo "Setting a static IP prevents connection issues after reboot."
-  echo "You can skip this and configure it later if needed."
+  echo "Choose which interface gets the static address."
+  echo "  (Previously the installer only targeted the default route — often wlan0 — so a USB static IP"
+  echo "   was wrongly applied to Wi-Fi. USB gadget needs usb0 + dwc2 + g_ether.)"
   echo
   read -p "Configure static IP? (y/N): " CONFIGURE_STATIC_IP
-  
+
   if [[ ! "$CONFIGURE_STATIC_IP" =~ ^[Yy]$ ]]; then
     echo "Skipping static IP configuration."
     return 0
   fi
-  
-  # Detect active network interface
-  ACTIVE_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -1)
-  if [ -z "$ACTIVE_INTERFACE" ]; then
-    # Fallback detection
-    if ip link show wlan0 >/dev/null 2>&1; then
-      ACTIVE_INTERFACE="wlan0"
-    elif ip link show eth0 >/dev/null 2>&1; then
-      ACTIVE_INTERFACE="eth0"
-    else
-      echo "WARNING: Could not detect network interface. Skipping static IP."
-      return 1
-    fi
-  fi
-  
-  echo
-  echo "Detected active interface: $ACTIVE_INTERFACE"
-  echo
-  
-  # Get current network info
-  CURRENT_IP=$(ip addr show "$ACTIVE_INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
-  CURRENT_GATEWAY=$(ip route | grep default | awk '{print $3}' | head -1)
-  
-  if [ -n "$CURRENT_IP" ]; then
-    echo "Current IP: $CURRENT_IP"
-    echo "Current Gateway: $CURRENT_GATEWAY"
-    echo
-    read -p "Use current IP as static IP? (Y/n): " USE_CURRENT
-    if [[ ! "$USE_CURRENT" =~ ^[Nn]$ ]]; then
-      STATIC_IP="$CURRENT_IP"
-      STATIC_GATEWAY="$CURRENT_GATEWAY"
+
+  echo ""
+  echo "Which interface should receive the static IPv4 address?"
+  echo "  1) wlan0 — Wi-Fi"
+  echo "  2) eth0 — Ethernet"
+  echo "  3) usb0 — USB Ethernet gadget (SSH from PC over USB; Pi Zero / OTG)"
+  read -p "Enter choice (1-3) [1]: " IF_CHOICE
+  case "${IF_CHOICE:-1}" in
+    2) ACTIVE_INTERFACE="eth0" ;;
+    3) ACTIVE_INTERFACE="usb0" ;;
+    *) ACTIVE_INTERFACE="wlan0" ;;
+  esac
+
+  if [ "$ACTIVE_INTERFACE" = "usb0" ]; then
+    ensure_usb_gadget_boot_config
+    echo ""
+    echo "USB gadget: use a dedicated subnet (e.g. 192.168.7.x) different from your home LAN."
+    echo "Example: Pi usb0 = 192.168.7.2, set the PC's RNDIS/USB Ethernet adapter to 192.168.7.1/24."
+    read -p "Static IPv4 for usb0 [192.168.7.2]: " STATIC_IP
+    STATIC_IP="${STATIC_IP:-192.168.7.2}"
+    read -p "Gateway for usb0 (optional; e.g. PC 192.168.7.1) or Enter for none: " STATIC_GATEWAY
+    STATIC_GATEWAY="${STATIC_GATEWAY:-}"
+    read -p "DNS for usb0 (optional) [8.8.8.8]: " STATIC_DNS
+    STATIC_DNS="${STATIC_DNS:-8.8.8.8}"
+  else
+    # wlan0 / eth0: detect or ask
+    echo ""
+    echo "Selected interface: $ACTIVE_INTERFACE"
+    CURRENT_IP=$(ip addr show "$ACTIVE_INTERFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    CURRENT_GATEWAY=$(ip route | grep default | awk '{print $3}' | head -1)
+    if [ -n "$CURRENT_IP" ]; then
+      echo "Current IP on $ACTIVE_INTERFACE: $CURRENT_IP"
+      echo "Current default gateway: ${CURRENT_GATEWAY:-unknown}"
+      echo
+      read -p "Use current IP as static IP? (Y/n): " USE_CURRENT
+      if [[ ! "$USE_CURRENT" =~ ^[Nn]$ ]]; then
+        STATIC_IP="$CURRENT_IP"
+        STATIC_GATEWAY="${CURRENT_GATEWAY:-}"
+      else
+        read -p "Enter static IP address (e.g., 192.168.1.100): " STATIC_IP
+        read -p "Enter gateway/router IP (e.g., 192.168.1.1): " STATIC_GATEWAY
+      fi
     else
       read -p "Enter static IP address (e.g., 192.168.1.100): " STATIC_IP
       read -p "Enter gateway/router IP (e.g., 192.168.1.1): " STATIC_GATEWAY
     fi
-  else
-    read -p "Enter static IP address (e.g., 192.168.1.100): " STATIC_IP
-    read -p "Enter gateway/router IP (e.g., 192.168.1.1): " STATIC_GATEWAY
+    read -p "Enter DNS servers (default: 8.8.8.8 1.1.1.1): " STATIC_DNS
+    STATIC_DNS="${STATIC_DNS:-8.8.8.8 1.1.1.1}"
   fi
-  
-  # Validate IP format (basic)
+
   if [[ ! "$STATIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "ERROR: Invalid IP address format. Skipping static IP configuration."
     return 1
   fi
-  
-  if [[ ! "$STATIC_GATEWAY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+
+  if [ -n "$STATIC_GATEWAY" ] && [[ ! "$STATIC_GATEWAY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "ERROR: Invalid gateway format. Skipping static IP configuration."
     return 1
   fi
-  
-  # Extract subnet from IP (assume /24)
-  SUBNET=$(echo "$STATIC_IP" | cut -d. -f1-3)
+
   STATIC_IP_WITH_MASK="${STATIC_IP}/24"
-  
-  # Ask for DNS (optional, with defaults)
-  read -p "Enter DNS servers (default: 8.8.8.8 1.1.1.1): " STATIC_DNS
-  STATIC_DNS="${STATIC_DNS:-8.8.8.8 1.1.1.1}"
-  
+  SUBNET=$(echo "$STATIC_IP" | cut -d. -f1-3)
+
   echo
   echo "Configuration summary:"
   echo "  Interface: $ACTIVE_INTERFACE"
   echo "  IP Address: $STATIC_IP_WITH_MASK"
-  echo "  Gateway: $STATIC_GATEWAY"
+  echo "  Gateway: ${STATIC_GATEWAY:-(none)}"
   echo "  DNS: $STATIC_DNS"
   echo
   read -p "Apply this configuration? (Y/n): " CONFIRM
-  
+
   if [[ "$CONFIRM" =~ ^[Nn]$ ]]; then
     echo "Skipping static IP configuration."
     return 0
   fi
 
-  # Raspberry Pi OS Bookworm often uses NetworkManager for wlan0/eth0. dhcpcd.conf alone is IGNORED then.
+  DNS_COMMA=$(echo "$STATIC_DNS" | tr ' ' ',')
+
+  # --- usb0: dedicated NM profile (device may not exist until after reboot) ---
+  if [ "$ACTIVE_INTERFACE" = "usb0" ]; then
+    if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+      nmcli connection delete ragnar-usb-gadget 2>/dev/null || true
+      if nmcli connection add type ethernet con-name ragnar-usb-gadget ifname usb0 \
+        ipv4.method manual \
+        ipv4.addresses "${STATIC_IP}/24" \
+        ipv6.method ignore \
+        connection.autoconnect yes 2>/dev/null; then
+        echo "✓ NetworkManager profile ragnar-usb-gadget created for usb0"
+        if [ -n "$STATIC_GATEWAY" ]; then
+          nmcli connection modify ragnar-usb-gadget ipv4.gateway "$STATIC_GATEWAY" ipv4.dns "$DNS_COMMA" ipv4.ignore-auto-dns yes 2>/dev/null || true
+        else
+          nmcli connection modify ragnar-usb-gadget ipv4.never-default yes ipv4.ignore-auto-dns yes 2>/dev/null || true
+        fi
+        nmcli connection up ragnar-usb-gadget 2>/dev/null || echo "⚠ usb0 not present yet — profile will apply after reboot when the gadget loads."
+      else
+        echo "WARNING: nmcli could not create usb0 profile; try dhcpcd fallback."
+      fi
+    fi
+    DHCPCD_CONF="/etc/dhcpcd.conf"
+    if [ -f "$DHCPCD_CONF" ] && ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
+      cp "$DHCPCD_CONF" "${DHCPCD_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
+      sed -i "/^interface usb0$/,/^$/d" "$DHCPCD_CONF"
+      {
+        echo ""
+        echo "# Ragnar installer: usb0 static"
+        echo "interface usb0"
+        echo "static ip_address=$STATIC_IP_WITH_MASK"
+        [ -n "$STATIC_GATEWAY" ] && echo "static routers=$STATIC_GATEWAY"
+        echo "static domain_name_servers=$STATIC_DNS"
+      } >>"$DHCPCD_CONF"
+      echo "✓ dhcpcd: usb0 block appended"
+    fi
+    echo ""
+    echo "SSH over USB: after reboot, set your PC's USB Ethernet/RNDIS to the same subnet (e.g. ${SUBNET}.1/24)."
+    echo "Then: ssh ragnar@$STATIC_IP"
+    echo "Run: sudo /home/ragnar/Ragnar/scripts/check_usb_ssh.sh"
+    return 0
+  fi
+
+  # --- wlan0 / eth0: existing NM + dhcpcd path ---
   NM_CONN=""
   if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager 2>/dev/null; then
     NM_CONN=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="$ACTIVE_INTERFACE" '$2==d {print $1; exit}')
@@ -195,9 +270,12 @@ configure_static_ip() {
 
   if [ -n "$NM_CONN" ]; then
     echo ""
-    echo "Using NetworkManager (Bookworm default) — applying static IP via nmcli."
+    echo "Using NetworkManager — applying static IP via nmcli."
     echo "Connection: $NM_CONN  Device: $ACTIVE_INTERFACE"
-    DNS_COMMA=$(echo "$STATIC_DNS" | tr ' ' ',')
+    if [ -z "$STATIC_GATEWAY" ]; then
+      echo "WARNING: No gateway set; filling from default route or enter manually later."
+      STATIC_GATEWAY=$(ip route | grep default | awk '{print $3}' | head -1)
+    fi
     if nmcli connection modify "$NM_CONN" \
       ipv4.method manual \
       ipv4.addresses "${STATIC_IP}/24" \
@@ -219,29 +297,26 @@ configure_static_ip() {
         echo "⚠ Current IPv4 on $ACTIVE_INTERFACE: ${NEW_IP:-unknown} (expected $STATIC_IP) — reboot if needed."
       fi
       echo ""
-      echo "After reboot, connect with: ssh ragnar@$STATIC_IP"
-      echo "If SSH still fails, use HDMI+keyboard or Ethernet and run: nmcli connection show \"$NM_CONN\""
+      echo "After reboot: ssh ragnar@$STATIC_IP"
       return 0
     fi
   else
     if systemctl is-active --quiet NetworkManager 2>/dev/null; then
       echo ""
-      echo "WARNING: NetworkManager is active but no nmcli connection was found for $ACTIVE_INTERFACE."
-      echo "Falling back to dhcpcd.conf (may NOT apply on Bookworm — prefer fixing NetworkManager)."
+      echo "WARNING: NetworkManager active but no connection found for $ACTIVE_INTERFACE."
+      echo "Falling back to dhcpcd.conf (may NOT apply on Bookworm)."
     fi
   fi
 
-  # Fallback: dhcpcd (older Pi OS / images without NM on this interface)
   DHCPCD_CONF="/etc/dhcpcd.conf"
-
   if [ ! -f "$DHCPCD_CONF" ]; then
-    echo "WARNING: $DHCPCD_CONF not found and NetworkManager path not used. Static IP may not persist."
+    echo "WARNING: $DHCPCD_CONF not found. Static IP may not persist."
   fi
 
   if [ -f "$DHCPCD_CONF" ]; then
     cp "$DHCPCD_CONF" "${DHCPCD_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
     sed -i "/^interface $ACTIVE_INTERFACE$/,/^$/d" "$DHCPCD_CONF"
-    cat >> "$DHCPCD_CONF" <<EOF
+    cat >>"$DHCPCD_CONF" <<EOF
 
 # Static IP configuration for $ACTIVE_INTERFACE (configured by Ragnar installer)
 interface $ACTIVE_INTERFACE
@@ -253,20 +328,18 @@ EOF
   fi
 
   echo ""
-  echo "NOTE: With dhcpcd fallback, static IP often requires a reboot on Pi OS."
-  echo "After reboot, connect with: ssh ragnar@$STATIC_IP"
+  echo "NOTE: dhcpcd fallback may require a reboot on Pi OS."
+  echo "After reboot: ssh ragnar@$STATIC_IP"
 
-  echo ""
   read -p "Apply static IP now (restart dhcpcd)? (y/N): " APPLY_NOW
   if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
-    echo "Applying..."
     systemctl restart dhcpcd 2>/dev/null || systemctl restart networking 2>/dev/null || true
     sleep 3
-    NEW_IP=$(ip addr show "$ACTIVE_INTERFACE" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    NEW_IP=$(ip addr show "$ACTIVE_INTERFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     if [ "$NEW_IP" = "$STATIC_IP" ]; then
       echo "✓ Static IP applied successfully: $NEW_IP"
     else
-      echo "⚠ Current IP: ${NEW_IP:-none} — reboot may be required for dhcpcd."
+      echo "⚠ Current IP: ${NEW_IP:-none} — reboot may be required."
     fi
   fi
 }
@@ -1492,13 +1565,47 @@ VERIFYSH
   chmod +x "$RAGNAR_DIR/scripts/verify_displayhatmini_boot.sh"
 fi
 
+# Optional: boot journal viewer on Display HAT Mini (must complete before ragnar — same SPI bus)
+DISPLAY_AFTER_BOOT=""
+DISPLAY_WANTS_BOOT=""
+if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
+  DISPLAY_AFTER_BOOT=" ragnar-display.service"
+  DISPLAY_WANTS_BOOT=" ragnar-display.service"
+fi
+
+if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
+  echo "Installing ragnar-display.service (boot log on HAT Mini, before ragnar)..."
+  cat > /etc/systemd/system/ragnar-display.service <<DSVC
+[Unit]
+Description=Ragnar boot journal on Display HAT Mini
+DefaultDependencies=no
+After=local-fs.target systemd-journald.socket sysinit.target
+Before=ragnar.service
+Wants=systemd-journald.socket
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -OO $RAGNAR_DIR/scripts/ragnar_boot_display.py
+Environment=RAGNAR_BOOT_DISPLAY_SEC=45
+Environment=RAGNAR_DIR=$RAGNAR_DIR
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+DSVC
+  chmod +x "$RAGNAR_DIR/scripts/ragnar_boot_display.py" 2>/dev/null || true
+fi
+
 echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
 Description=ragnar Service
 # Wait for routable network when NM/networkd publish network-online (reduces Wi-Fi race on boot)
-After=network-online.target network.target ssh.service
-Wants=network-online.target
+After=network-online.target network.target ssh.service$DISPLAY_AFTER_BOOT
+Wants=network-online.target$DISPLAY_WANTS_BOOT
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -1573,6 +1680,10 @@ ls /dev/spi* || true
 
 echo "Enabling and starting Ragnar..."
 systemctl daemon-reload
+if [ "$DISPLAY_MODE" = "displayhatmini" ] && [ -f /etc/systemd/system/ragnar-display.service ]; then
+  systemctl enable ragnar-display.service 2>/dev/null || true
+  echo "Enabled ragnar-display.service (boot log on HAT Mini ends before ragnar starts)."
+fi
 systemctl enable ragnar
 
 # Help network-online.target actually wait for Wi-Fi/Ethernet on Bookworm (optional unit)
@@ -1585,7 +1696,7 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-onlin
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service
@@ -1674,6 +1785,7 @@ echo " Safe reboot (runs pre-flight checks): sudo $RAGNAR_DIR/scripts/safe_reboo
 echo " Pre-reboot checks only:              sudo $RAGNAR_DIR/scripts/pre_reboot_check.sh"
 echo " Startup self-test:                   sudo RAGNAR_DIR=$RAGNAR_DIR /usr/bin/python3 $RAGNAR_DIR/scripts/ragnar_startup_selftest.py"
 echo " Health log:                         /var/log/ragnar_health.log"
+echo " USB gadget SSH check:               sudo $RAGNAR_DIR/scripts/check_usb_ssh.sh  (see docs/USB_SSH_GADGET.md)"
 echo " Selected mode: $DISPLAY_MODE"
 echo " Display setting: $SELECTED_EPD"
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
