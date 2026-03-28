@@ -51,13 +51,40 @@ else
   bad "/dev/i2c-1 missing — enable I2C (raspi-config / boot config)"
 fi
 
-if command -v i2cdetect &>/dev/null && [[ -c /dev/i2c-1 ]]; then
+# Count I2C addresses that responded (not "--") on a bus.
+i2c_addr_count() {
+  local bus=$1
+  [[ -c "/dev/i2c-${bus}" ]] || return 0
+  i2cdetect -y "$bus" 2>/dev/null | awk '
+    /^[0-9a-f]{2}:/ {
+      for (i = 2; i <= NF; i++) {
+        if ($i != "" && $i != "--") n++
+      }
+    }
+    END { print n+0 }
+  '
+}
+
+if command -v i2cdetect &>/dev/null; then
   echo
-  echo "--- i2cdetect -y 1 (PiSugar often 0x32 / 0x75 range; see vendor) ---"
-  i2cdetect -y 1 2>/dev/null || warn "i2cdetect failed"
-  echo
+  for b in 1 2 0; do
+    [[ -c "/dev/i2c-${b}" ]] || continue
+    echo "--- i2cdetect -y ${b} (PiSugar RTC often 0x57; MCU varies by model) ---"
+    i2cdetect -y "$b" 2>/dev/null || warn "i2cdetect -y ${b} failed"
+    n=$(i2c_addr_count "$b")
+    if [[ "${n:-0}" -eq 0 ]]; then
+      warn "bus ${b}: no I2C devices detected (all --)"
+    else
+      ok "bus ${b}: ${n} address(es) responded"
+    fi
+    echo
+  done
+  n1=$(i2c_addr_count 1)
+  if [[ "${n1:-0}" -eq 0 ]]; then
+    bad "bus 1 empty — PiSugar cannot work (nothing at 0x57 etc.). Reseat stack, check 5V, or disable pisugar-server if no hardware: systemctl disable --now pisugar-server"
+  fi
 else
-  warn "i2cdetect not installed or no bus — apt install i2c-tools"
+  warn "i2cdetect not installed — apt install i2c-tools"
 fi
 
 # --- TCP (pisugar Python client uses localhost; port varies by pisugar-server version) ---
