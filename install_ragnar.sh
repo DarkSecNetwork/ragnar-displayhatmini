@@ -27,7 +27,7 @@ DISPLAYHATMINI_REF_H=240
 DISPLAYHATMINI_ROTATION=180
 
 echo "========================================"
-echo " Ragnar Installer v6.2"
+echo " Ragnar Installer v6.3"
 echo "========================================"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -37,6 +37,109 @@ fi
 
 # Directory where this installer script lives (for local repo install)
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Boot file backup / validation (Ragnar/scripts/boot_validate.inc); embedded fallback for wget-only install.
+# shellcheck disable=SC1091
+if [[ -f "$INSTALLER_DIR/Ragnar/scripts/boot_validate.inc" ]]; then
+  source "$INSTALLER_DIR/Ragnar/scripts/boot_validate.inc"
+elif [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/Ragnar/scripts/boot_validate.inc" ]]; then
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/Ragnar/scripts/boot_validate.inc"
+else
+  source /dev/stdin <<'BOOT_VALIDATE_INC'
+# shellcheck shell=bash
+# Shared boot validation for Raspberry Pi OS (Bookworm /boot/firmware).
+# Sourced by install_ragnar.sh and validate_boot_files.sh — keep logic in one place.
+
+ragnar_boot_firmware_dir() {
+  if [[ -d /boot/firmware ]]; then
+    echo /boot/firmware
+  else
+    echo /boot
+  fi
+}
+
+# Call once before any installer change to config.txt / cmdline.txt (preserves pre-Ragnar state).
+ragnar_boot_backup() {
+  local fw f
+  fw="$(ragnar_boot_firmware_dir)"
+  for f in "$fw/config.txt" "$fw/cmdline.txt"; do
+    [[ -f "$f" ]] || continue
+    [[ -f "${f}.ragnar.bak" ]] && continue
+    if cp -a "$f" "${f}.ragnar.bak"; then
+      echo "Backed up (restore point): ${f}.ragnar.bak"
+    fi
+  done
+  if [[ "$(ragnar_boot_firmware_dir)" == "/boot/firmware" ]] && [[ -f /boot/config.txt ]]; then
+    f="/boot/config.txt"
+    [[ -f "${f}.ragnar.bak" ]] || cp -a "$f" "${f}.ragnar.bak" 2>/dev/null && echo "Backed up: ${f}.ragnar.bak" || true
+  fi
+}
+
+ragnar_boot_restore_from_bak() {
+  local fw f
+  fw="$(ragnar_boot_firmware_dir)"
+  echo "Attempting restore from .ragnar.bak backups..."
+  for f in "$fw/config.txt" "$fw/cmdline.txt"; do
+    if [[ -f "${f}.ragnar.bak" ]] && [[ -f "$f" ]]; then
+      cp -a "${f}.ragnar.bak" "$f" && echo "Restored $f from ${f}.ragnar.bak"
+    fi
+  done
+  if [[ "$(ragnar_boot_firmware_dir)" == "/boot/firmware" ]] && [[ -f /boot/config.txt.ragnar.bak ]]; then
+    cp -a /boot/config.txt.ragnar.bak /boot/config.txt && echo "Restored /boot/config.txt from .ragnar.bak"
+  fi
+}
+
+ragnar_validate_cmdline_file() {
+  local f="$1"
+  local line_count content
+  [[ -f "$f" ]] || { echo "validate: missing $f" >&2; return 1; }
+  line_count=$(grep -cve '^[[:space:]]*$' "$f" 2>/dev/null || echo 0)
+  if [[ "$line_count" -ne 1 ]]; then
+    echo "validate: $f must have exactly one non-empty line (found $line_count). Multi-line cmdline breaks Raspberry Pi boot." >&2
+    return 1
+  fi
+  content=$(tr -d '\r' <"$f" | head -1)
+  if [[ ! "$content" =~ (root=|PARTUUID=) ]]; then
+    echo "validate: $f missing root= or PARTUUID= — possible corruption." >&2
+    return 1
+  fi
+  if grep -q 'modules-load=dwc2,g_ether' <<<"$content"; then
+    local n
+    n=$(grep -o 'modules-load=dwc2,g_ether' <<<"$content" | wc -l | tr -d ' ')
+    if [[ "${n:-0}" -gt 1 ]]; then
+      echo "validate: duplicate modules-load=dwc2,g_ether in $f" >&2
+      return 1
+    fi
+  fi
+  if [[ "${#content}" -gt 4096 ]]; then
+    echo "validate: $f line unreasonably long (${#content} chars)" >&2
+    return 1
+  fi
+  return 0
+}
+
+ragnar_validate_config_txt() {
+  local f="$1"
+  [[ -f "$f" ]] || { echo "validate: missing $f" >&2; return 1; }
+  if ! grep -qE '^[[:space:]]*[^#[:space:]]' "$f" 2>/dev/null; then
+    echo "validate: $f has no active settings (only comments?) — suspicious." >&2
+    return 1
+  fi
+  return 0
+}
+
+ragnar_validate_boot_after_install() {
+  local fw err=0
+  fw="$(ragnar_boot_firmware_dir)"
+  ragnar_validate_config_txt "$fw/config.txt" || err=1
+  ragnar_validate_cmdline_file "$fw/cmdline.txt" || err=1
+  if [[ -f /boot/config.txt ]] && [[ "$fw" == "/boot/firmware" ]]; then
+    ragnar_validate_config_txt /boot/config.txt || err=1
+  fi
+  return "$err"
+}
+BOOT_VALIDATE_INC
+fi
 
 append_if_missing() {
   local line="$1"
@@ -99,6 +202,7 @@ ask_optional_features() {
 }
 
 # USB gadget Ethernet (SSH over USB to PC): requires dwc2 + g_ether; interface usb0.
+# Refuses to edit cmdline if it is not a single non-empty line (multi-line cmdline bricks Pi boot).
 ensure_usb_gadget_boot_config() {
   echo ""
   echo "========================================"
@@ -106,9 +210,17 @@ ensure_usb_gadget_boot_config() {
   echo "========================================"
   local cl="$CMDLINE_TXT"
   [ -f "$cl" ] || cl="/boot/cmdline.txt"
+  ragnar_boot_backup 2>/dev/null || true
   append_if_missing "dtoverlay=dwc2" "$CONFIG_TXT"
   [ -f /boot/config.txt ] && [ "$CONFIG_TXT" != "/boot/config.txt" ] && append_if_missing "dtoverlay=dwc2" "/boot/config.txt" || true
   if [ -f "$cl" ]; then
+    local line_count
+    line_count=$(grep -cve '^[[:space:]]*$' "$cl" 2>/dev/null || echo 0)
+    if [ "$line_count" -ne 1 ]; then
+      echo "ERROR: $cl must be exactly one non-empty line for Raspberry Pi boot (found $line_count)."
+      echo "       Refusing USB gadget cmdline edit. Fix cmdline manually or restore from ${cl}.ragnar.bak"
+      return 1
+    fi
     if ! tr -d '\n' <"$cl" | grep -q 'modules-load=dwc2,g_ether'; then
       cp "$cl" "${cl}.backup.$(date +%Y%m%d_%H%M%S)"
       # Single-line cmdline: append kernel module load for USB Ethernet gadget
@@ -116,6 +228,16 @@ ensure_usb_gadget_boot_config() {
       echo "✓ Appended modules-load=dwc2,g_ether to $cl"
     else
       echo "✓ $cl already contains modules-load=dwc2,g_ether"
+    fi
+    if command -v ragnar_validate_cmdline_file >/dev/null 2>&1; then
+      ragnar_validate_cmdline_file "$cl" || {
+        echo "ERROR: cmdline validation failed after USB gadget edit — restoring backup if present."
+        if [ -f "${cl}.ragnar.bak" ]; then
+          cp -a "${cl}.ragnar.bak" "$cl"
+          echo "Restored $cl from ${cl}.ragnar.bak"
+        fi
+        return 1
+      }
     fi
   else
     echo "WARNING: cmdline.txt not found ($CMDLINE_TXT or /boot/cmdline.txt). USB gadget may not load."
@@ -876,19 +998,36 @@ fi
 touch /boot/ssh 2>/dev/null || touch /boot/firmware/ssh 2>/dev/null || true
 echo "SSH enabled and started"
 
-echo "Applying boot performance tuning..."
+echo "Applying boot-safe defaults (SPI + headless GPU split; backups + validation)..."
+echo "  (Optional: RAGNAR_INSTALLER_PERF_TUNING=1 enables legacy core_freq tweaks — not recommended on Pi Zero 2 W.)"
+ragnar_boot_backup
+# Older installer runs: remove act LED override (restores normal blink / heartbeat on green ACT)
+sed -i '/^[[:space:]]*dtparam=act_led_trigger=none/d' "$CONFIG_TXT" 2>/dev/null || true
+[ -f /boot/config.txt ] && sed -i '/^[[:space:]]*dtparam=act_led_trigger=none/d' /boot/config.txt 2>/dev/null || true
 append_if_missing "dtparam=spi=on" "$CONFIG_TXT"
 append_if_missing "gpu_mem=128" "$CONFIG_TXT"
-append_if_missing "core_freq=500" "$CONFIG_TXT"
-append_if_missing "core_freq_min=500" "$CONFIG_TXT"
-# Disable activity LED (green) so it doesn't blink while Ragnar runs
-append_if_missing "dtparam=act_led_trigger=none" "$CONFIG_TXT"
-# Fallback for older Raspberry Pi OS (config in /boot)
-[ -f /boot/config.txt ] && append_if_missing "dtparam=act_led_trigger=none" "/boot/config.txt" || true
+if [[ "${RAGNAR_INSTALLER_PERF_TUNING:-0}" == "1" ]]; then
+  append_if_missing "core_freq=500" "$CONFIG_TXT"
+  append_if_missing "core_freq_min=500" "$CONFIG_TXT"
+  echo "  Applied RAGNAR_INSTALLER_PERF_TUNING=1 (core_freq / core_freq_min)."
+fi
+# Do NOT set act_led_trigger=none — it stops normal green ACT blinking and is often mistaken for a boot hang.
+# Legacy installs: remove that line if you want the default heartbeat/activity behaviour back.
+[ -f /boot/config.txt ] && append_if_missing "dtparam=spi=on" "/boot/config.txt" || true
+[[ "${RAGNAR_INSTALLER_PERF_TUNING:-0}" == "1" ]] && { [ -f /boot/config.txt ] && append_if_missing "gpu_mem=128" "/boot/config.txt" || true; }
 
 select_display
 ask_optional_features
 configure_static_ip
+
+echo "Validating boot files after firmware/network changes..."
+if ! ragnar_validate_boot_after_install; then
+  echo ""
+  echo "FATAL: Boot file validation failed. Restoring pre-install backups (*.ragnar.bak) and aborting."
+  ragnar_boot_restore_from_bak
+  echo "Installer stopped so the system stays bootable. Fix issues above or report a bug."
+  exit 1
+fi
 
 echo "Preparing Ragnar directory..."
 ensure_user
@@ -1696,7 +1835,7 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-onlin
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service

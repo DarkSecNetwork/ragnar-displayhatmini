@@ -51,6 +51,19 @@ fi
 rm -f /tmp/.ragnar_pre_reboot_rw_test
 pass "/tmp writable"
 
+# --- Boot partition (config.txt / cmdline.txt) — must stay valid for Raspberry Pi boot ---
+BOOT_VAL="${RAGNAR_SCRIPTS}/validate_boot_files.sh"
+if [[ -x "$BOOT_VAL" ]]; then
+  if ! "$BOOT_VAL"; then
+    fail "Boot file validation failed (run: sudo $BOOT_VAL; check /boot/firmware/cmdline.txt is one line with root=)"
+  fi
+  pass "validate_boot_files.sh OK (/boot/firmware config.txt + cmdline.txt)"
+elif [[ -f "$BOOT_VAL" ]]; then
+  fail "validate_boot_files.sh exists but is not executable: chmod +x $BOOT_VAL"
+else
+  fail "Missing $BOOT_VAL (reinstall Ragnar or copy scripts from repo)"
+fi
+
 # --- Directories ---
 for d in "$RAGNAR_DIR" "${RAGNAR_DIR}/config" "${RAGNAR_DIR}/data"; do
   if [[ ! -d "$d" ]]; then

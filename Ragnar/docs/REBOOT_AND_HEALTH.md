@@ -6,6 +6,7 @@ This document describes why Ragnar can differ **manually vs systemd**, what was 
 
 | Issue | Evidence | Mitigation |
 |--------|-----------|------------|
+| **Solid green ACT / “no boot” after install** | Installer used `dtparam=act_led_trigger=none` (no SD-activity blink) and fixed `core_freq` — looks like a hang or destabilizes some boards. | v6.3+: no ACT override by default; `core_freq` only if `RAGNAR_INSTALLER_PERF_TUNING=1`; `validate_boot_files.sh` + `*.ragnar.bak` backups. |
 | **Wi-Fi / IP not ready at service start** | `After=network.target` does not wait for DHCP; orchestrator/display race with NM. | `After=` + `Wants=network-online.target`; enable `NetworkManager-wait-online.service` when present. |
 | **Static IP ignored (Bookworm)** | Only `dhcpcd.conf` written while **NetworkManager** owns `wlan0`. | Installer uses **`nmcli`** when NM is active (see `install_ragnar.sh` `configure_static_ip`). |
 | **GPIO / display busy in verifier** | Second `EPD().init()` while `ragnar.service` holds lines → `EBUSY`. | Verifier treats busy as skip; self-test avoids display init unless `RAGNAR_SELFTEST_DISPLAY_INIT=1`. |
@@ -27,7 +28,9 @@ If something works manually but not at boot, compare: `systemctl show ragnar -p 
 
 | Script | Purpose |
 |--------|---------|
-| `/home/ragnar/Ragnar/scripts/pre_reboot_check.sh` | Validates disk, configs, Python self-test, systemd unit, service state, network presence, SPI if Display HAT Mini. **Exits non-zero** on failure. |
+| `/home/ragnar/Ragnar/scripts/pre_reboot_check.sh` | Validates disk, **boot partition** (`validate_boot_files.sh`: single-line `cmdline.txt`, `root=` / `PARTUUID=`, `config.txt` sane), Python self-test, systemd unit, service state, network presence, SPI if Display HAT Mini. **Exits non-zero** on failure. |
+| `/home/ragnar/Ragnar/scripts/validate_boot_files.sh` | Standalone check for `/boot/firmware/config.txt` and `cmdline.txt` (sources `boot_validate.inc`). |
+| `/home/ragnar/Ragnar/scripts/boot_validate.inc` | Shared helpers: `ragnar_boot_backup`, `ragnar_validate_boot_after_install`, restore from `*.ragnar.bak`. |
 | `/home/ragnar/Ragnar/scripts/safe_reboot.sh` | Runs `pre_reboot_check.sh`; only then **`/sbin/reboot`**. |
 | `/home/ragnar/Ragnar/scripts/ragnar_startup_selftest.py` | Syntax + key imports + config JSON + optional display init (see env below). |
 
