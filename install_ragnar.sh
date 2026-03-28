@@ -1496,7 +1496,11 @@ echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
 Description=ragnar Service
-After=network.target ssh.service
+# Wait for routable network when NM/networkd publish network-online (reduces Wi-Fi race on boot)
+After=network-online.target network.target ssh.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -1570,6 +1574,19 @@ ls /dev/spi* || true
 echo "Enabling and starting Ragnar..."
 systemctl daemon-reload
 systemctl enable ragnar
+
+# Help network-online.target actually wait for Wi-Fi/Ethernet on Bookworm (optional unit)
+if systemctl list-unit-files 2>/dev/null | grep -q '^NetworkManager-wait-online.service'; then
+  systemctl enable NetworkManager-wait-online.service 2>/dev/null || true
+  echo "Enabled NetworkManager-wait-online.service (improves After=network-online.target for ragnar)."
+fi
+if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-online.service'; then
+  systemctl enable systemd-networkd-wait-online.service 2>/dev/null || true
+fi
+
+# Health / pre-reboot tooling
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" 2>/dev/null || true
+touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service
 echo "Testing Ragnar startup..."
@@ -1653,6 +1670,10 @@ grep -n '"epd_type"\|"ref_width"\|"ref_height"' "$RAGNAR_DIR/config/shared_confi
 echo ""
 echo "========================================"
 echo " INSTALL COMPLETE"
+echo " Safe reboot (runs pre-flight checks): sudo $RAGNAR_DIR/scripts/safe_reboot.sh"
+echo " Pre-reboot checks only:              sudo $RAGNAR_DIR/scripts/pre_reboot_check.sh"
+echo " Startup self-test:                   sudo RAGNAR_DIR=$RAGNAR_DIR /usr/bin/python3 $RAGNAR_DIR/scripts/ragnar_startup_selftest.py"
+echo " Health log:                         /var/log/ragnar_health.log"
 echo " Selected mode: $DISPLAY_MODE"
 echo " Display setting: $SELECTED_EPD"
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
@@ -1705,5 +1726,11 @@ echo ""
 
 read -p "Reboot now? (y/N): " R
 if [[ "$R" =~ ^[Yy]$ ]]; then
-  reboot
+  if [[ -x "$RAGNAR_DIR/scripts/safe_reboot.sh" ]]; then
+    echo "Running pre-reboot validation, then reboot..."
+    "$RAGNAR_DIR/scripts/safe_reboot.sh" || echo "Reboot aborted — fix failures and run: sudo $RAGNAR_DIR/scripts/safe_reboot.sh"
+  else
+    echo "WARNING: safe_reboot.sh missing; using plain reboot (no pre-checks)."
+    reboot
+  fi
 fi

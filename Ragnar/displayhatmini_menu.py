@@ -296,7 +296,20 @@ def apply_select(shared_data, item):
                 logger.warning("Menu action failed: %s", e)
 
         if key == "action_restart":
-            threading.Thread(target=lambda: _run("sleep 2 && sudo reboot"), daemon=True).start()
+            def _restart():
+                sb = "/home/ragnar/Ragnar/scripts/safe_reboot.sh"
+                try:
+                    if os.path.isfile(sb) and os.access(sb, os.X_OK):
+                        subprocess.Popen(
+                            ["/usr/bin/sudo", sb],
+                            start_new_session=True,
+                        )
+                        return
+                except Exception as e:
+                    logger.warning("safe_reboot.sh failed, falling back to reboot: %s", e)
+                _run("sleep 2 && sudo reboot")
+
+            threading.Thread(target=_restart, daemon=True).start()
             return True
         if key == "action_shutdown":
             threading.Thread(target=lambda: _run("sleep 2 && sudo shutdown -h now"), daemon=True).start()

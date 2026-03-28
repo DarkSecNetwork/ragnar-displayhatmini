@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Reboot / boot reliability and safe reboot
+
+See **[REBOOT_AND_HEALTH.md](REBOOT_AND_HEALTH.md)** for `network-online.target` ordering, pre-reboot checks, and **`safe_reboot.sh`**.
+
 ## Ragnar keeps crashing
 
 ### 1. Get the crash logs
