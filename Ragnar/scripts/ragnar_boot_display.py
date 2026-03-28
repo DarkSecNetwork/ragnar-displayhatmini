@@ -10,6 +10,7 @@ in display.py after handoff.
 Env:
   RAGNAR_DIR          default /home/ragnar/Ragnar
   RAGNAR_BOOT_DISPLAY_SEC  how long to tail journal (default 45)
+  RAGNAR_NETWORK_SCREEN_SEC  after journal, show network/SSH info (default 10; set 0 to skip)
 """
 from __future__ import annotations
 
@@ -20,13 +21,24 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 # Defaults tuned for Pi Zero 2 W
 RAGNAR_DIR = os.environ.get("RAGNAR_DIR", "/home/ragnar/Ragnar")
 RUN_SEC = float(os.environ.get("RAGNAR_BOOT_DISPLAY_SEC", "45"))
+NETWORK_SEC = float(os.environ.get("RAGNAR_NETWORK_SCREEN_SEC", "10"))
 MAX_LINES = 14
 TITLE = "RAGNAR BOOT LOG"
 MIN_REDRAW_INTERVAL = 0.18  # ~5.5 fps max
+
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+try:
+    from network_boot_facts import collect_network_facts
+except ImportError:
+    collect_network_facts = None  # type: ignore[misc, assignment]
 
 
 def _classify(line: str) -> str:
@@ -187,13 +199,73 @@ def main() -> int:
             time.sleep(0.03)
     finally:
         stop.set()
+
+    # --- Phase 2: network + SSH (keep SPI open — do not module_exit before this) ---
+    if NETWORK_SEC > 0.5 and collect_network_facts is not None:
         try:
-            epd.module_exit()
-        except Exception:
-            pass
+            _show_network_screen(epd, w, h, font_title, font_body, NETWORK_SEC)
+        except Exception as e:
+            print(f"ragnar_boot_display: network screen error: {e}", file=sys.stderr)
+
+    try:
+        epd.module_exit()
+    except Exception:
+        pass
 
     print("ragnar_boot_display: finished", file=sys.stderr)
     return 0
+
+
+def _show_network_screen(epd, w: int, h: int, font_title, font_body, duration_sec: float) -> None:
+    """Full-screen network summary for SSH/LAN discovery."""
+    from PIL import Image, ImageDraw
+
+    t_end = time.time() + duration_sec
+    bg = (10, 14, 28)
+    fg = (235, 240, 255)
+    accent = (120, 200, 255)
+    warn = (255, 180, 100)
+
+    last_log = ""
+    while time.time() < t_end:
+        facts = collect_network_facts()
+        line = f"{facts.detail} ssh={facts.ssh_status}"
+        if line != last_log:
+            print(f"ragnar_boot_display: network {line}", file=sys.stderr)
+            last_log = line
+
+        img = Image.new("RGB", (w, h), bg)
+        draw = ImageDraw.Draw(img)
+        draw.text((4, 2), "RAGNAR NETWORK", font=font_title, fill=accent)
+
+        y = 22
+        lh = 14
+        lines = [
+            f"IF: {facts.interface}",
+            f"IP: {facts.ip_addr}",
+            f"GW: {facts.gateway}",
+            f"DNS: {facts.dns}",
+        ]
+        ssh_line = f"SSH: {facts.ssh_status}"
+        for line in lines:
+            col = fg
+            if "NO NETWORK" in line:
+                col = warn
+            draw.text((4, y), line[:48], font=font_body, fill=col)
+            y += lh
+
+        ssh_col = accent if facts.ssh_status == "READY" else (warn if facts.ssh_status in ("OFFLINE", "LOCALHOST") else fg)
+        draw.text((4, y), ssh_line[:48], font=font_body, fill=ssh_col)
+        y += lh + 4
+        draw.text((4, y), "ssh ragnar@<IP>", font=font_body, fill=(160, 160, 180))
+
+        try:
+            epd.display(img)
+        except Exception as e:
+            print(f"ragnar_boot_display: network frame: {e}", file=sys.stderr)
+        time.sleep(0.5)
+
+    print("ragnar_boot_display: network screen done", file=sys.stderr)
 
 
 if __name__ == "__main__":

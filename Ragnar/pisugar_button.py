@@ -9,6 +9,10 @@ Monitors the PiSugar button and triggers mode swaps between Ragnar and Pwnagotch
 
 Requires pisugar-server running and the `pisugar` Python package.
 Connection is via TCP to localhost (default pisugar-server setup).
+
+Env:
+  RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS — tries per wave before pausing (default 24)
+  RAGNAR_PISUGAR_RECONNECT_INTERVAL_SEC — seconds between waves if server is down (default 45)
 """
 
 import os
@@ -23,6 +27,26 @@ try:
 except Exception:
     import logging as _logging
     logger = _logging.getLogger("pisugar_button")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw, 10)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 class PiSugarButtonListener:
@@ -54,45 +78,61 @@ class PiSugarButtonListener:
         self._stop_event.set()
 
     def _run(self):
-        """Main loop: connect to pisugar-server and register button handlers."""
+        """Connect to pisugar-server with wave retries; keeps reconnecting if the daemon is late after boot."""
         try:
             from pisugar import connect_tcp, PiSugarServer
         except ImportError:
             logger.info("pisugar package not installed - button listener disabled")
             return
 
-        # Retry connection with backoff (pisugar-server may start after Ragnar)
-        for attempt in range(5):
-            if self._stop_event.is_set():
-                return
-            try:
-                conn, event_conn = connect_tcp('127.0.0.1')
-                self._server = PiSugarServer(conn, event_conn)
-                model = self._server.get_model()
-                logger.info(f"PiSugar connected: {model}")
-                self.available = True
-                break
-            except Exception as e:
-                wait = 5 * (attempt + 1)
-                logger.debug(f"PiSugar not available (attempt {attempt + 1}/5): {e}. Retry in {wait}s")
-                self._stop_event.wait(wait)
-        else:
-            logger.info("PiSugar not detected after 5 attempts - button listener disabled")
-            return
+        max_attempts = max(3, _env_int("RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS", 24))
+        wave_pause = max(5.0, _env_float("RAGNAR_PISUGAR_RECONNECT_INTERVAL_SEC", 45.0))
 
-        # Register button event handlers
-        try:
-            self._server.register_single_tap_handler(self._on_single_tap)
-            self._server.register_double_tap_handler(self._on_double_tap)
-            self._server.register_long_tap_handler(self._on_long_tap)
-            logger.info("PiSugar button handlers registered (single=manual_mode, double/long=swap)")
-        except Exception as e:
-            logger.error(f"Failed to register PiSugar button handlers: {e}")
-            return
-
-        # Keep thread alive to receive events (pisugar library uses the event connection)
         while not self._stop_event.is_set():
-            self._stop_event.wait(1)
+            connected = False
+            for attempt in range(max_attempts):
+                if self._stop_event.is_set():
+                    return
+                try:
+                    conn, event_conn = connect_tcp('127.0.0.1')
+                    self._server = PiSugarServer(conn, event_conn)
+                    model = self._server.get_model()
+                    logger.info(f"PiSugar connected: {model}")
+                    self.available = True
+                    connected = True
+                    break
+                except Exception as e:
+                    wait = min(12.0, 0.5 + attempt * 0.65)
+                    logger.debug(
+                        f"PiSugar not available (attempt {attempt + 1}/{max_attempts}): {e} — retry in {wait:.1f}s",
+                    )
+                    self._stop_event.wait(wait)
+
+            if not connected:
+                logger.info(
+                    f"PiSugar: no TCP connection after {max_attempts} attempts — "
+                    f"pisugar-server may still be starting; next wave in {wave_pause:.0f}s",
+                )
+                self._stop_event.wait(wave_pause)
+                continue
+
+            try:
+                self._server.register_single_tap_handler(self._on_single_tap)
+                self._server.register_double_tap_handler(self._on_double_tap)
+                self._server.register_long_tap_handler(self._on_long_tap)
+                logger.info("PiSugar button handlers registered (single=manual_mode, double/long=swap)")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to register PiSugar button handlers (server API / timing): {e} — will retry",
+                )
+                self.available = False
+                self._server = None
+                self._stop_event.wait(min(15.0, wave_pause))
+                continue
+
+            while not self._stop_event.is_set():
+                self._stop_event.wait(1)
+            return
 
     def _on_single_tap(self):
         """Single tap: toggle Ragnar manual mode."""
@@ -110,7 +150,7 @@ class PiSugarButtonListener:
                     ragnar.start_orchestrator()
                     logger.info("PiSugar tap: manual mode OFF (orchestrator started)")
         except Exception as e:
-            logger.error(f"PiSugar single tap handler error: {e}")
+            logger.warning(f"PiSugar single tap handler error: {e}")
 
     def _on_double_tap(self):
         """Double tap: swap between Ragnar and Pwnagotchi."""
@@ -143,7 +183,7 @@ class PiSugarButtonListener:
             _schedule_pwn_mode_switch(target)
 
         except Exception as e:
-            logger.error(f"PiSugar swap trigger failed: {e}")
+            logger.warning(f"PiSugar swap trigger failed: {e}")
 
     # ── Mock helpers (sinusoidal cycle: drains then charges over ~2 min) ──
 

@@ -765,7 +765,18 @@ class Display:
             y += line_height
 
     def _sleep_interruptible(self, current_page):
-        """Sleep for screen_delay but wake early if button changes the page."""
+        """Sleep for screen_delay but wake early if button changes the page.
+        Display HAT Mini: button_listener is None — drain DHM queue in short slices so menu is responsive."""
+        epd_type = self.config.get("epd_type", "")
+        if epd_type == "displayhatmini" and self.dhm_listener and self.dhm_listener.available:
+            delay = float(self.shared_data.screen_delay or 0.03)
+            slice_sec = 0.03
+            elapsed = 0.0
+            while elapsed < delay and not self.shared_data.display_should_exit:
+                self._drain_dhm_menu_events()
+                time.sleep(slice_sec)
+                elapsed += slice_sec
+            return
         if not self.button_listener:
             time.sleep(self.shared_data.screen_delay)
             return
@@ -775,6 +786,47 @@ class Display:
             if self.button_listener.current_page != current_page:
                 return  # Page changed, skip remaining sleep
             time.sleep(0.1)
+
+    def _drain_dhm_menu_events(self):
+        """Drain gpiozero button queue (non-blocking). Safe to call frequently from main loop or sleep slices."""
+        if not self.dhm_listener or not self.dhm_listener.available:
+            return
+        if EVENT_MENU_TOGGLE is None:
+            return
+        import os as _os
+        _log_ev = _os.environ.get("RAGNAR_DHM_LOG_EVENTS", "").strip().lower() in ("1", "true", "yes")
+        while True:
+            ev = self.dhm_listener.get_event()
+            if ev is None:
+                break
+            if _log_ev:
+                logger.info(f"Display HAT Mini button: {ev}")
+            if ev == EVENT_MENU_TOGGLE:
+                if build_flat_entries is not None:
+                    was_visible = self.menu_visible
+                    self.menu_visible = not self.menu_visible
+                    if self.menu_visible and not was_visible:
+                        self.menu_scroll = 0
+                        self.menu_cursor = 0
+            elif ev == EVENT_BACK:
+                self.menu_visible = False
+            elif ev == EVENT_UP and self.menu_visible:
+                entries = build_flat_entries(self.shared_data) if build_flat_entries else []
+                sel = get_selectable_count(entries) if entries else 0
+                if sel:
+                    self.menu_cursor = max(0, self.menu_cursor - 1)
+            elif ev == EVENT_DOWN and self.menu_visible:
+                entries = build_flat_entries(self.shared_data) if build_flat_entries else []
+                sel = get_selectable_count(entries) if entries else 0
+                if sel:
+                    self.menu_cursor = min(sel - 1, self.menu_cursor + 1)
+            elif ev == EVENT_SELECT and self.menu_visible and apply_select is not None:
+                entries = build_flat_entries(self.shared_data) if build_flat_entries else []
+                line_idx = cursor_to_line_index(entries, self.menu_cursor) if entries else 0
+                if line_idx < len(entries):
+                    _, _, item = entries[line_idx]
+                    if item:
+                        apply_select(self.shared_data, item)
 
     def _get_cached_page_data(self, key, fetch_fn, ttl=10):
         """Get cached page data, refreshing if older than ttl seconds."""
@@ -1266,6 +1318,9 @@ class Display:
                     self.epd_helper.display_partial(img)
                     if done and done.is_set():
                         break
+                    # Allow DHM queue to drain during splash (buttons may attach mid-wait)
+                    if self.dhm_listener and self.dhm_listener.available:
+                        self._drain_dhm_menu_events()
                     time.sleep(2)
         except Exception:
             pass
@@ -1287,37 +1342,7 @@ class Display:
 
                 # Display HAT Mini: A=menu toggle, B=select/back, X=up, Y=down
                 if self.dhm_listener and self.dhm_listener.available:
-                    while True:
-                        ev = self.dhm_listener.get_event()
-                        if ev is None:
-                            break
-                        if ev == EVENT_MENU_TOGGLE:
-                            if build_flat_entries is not None:
-                                was_visible = self.menu_visible
-                                self.menu_visible = not self.menu_visible
-                                # Fresh scroll/cursor when opening so navigation and highlight stay in sync
-                                if self.menu_visible and not was_visible:
-                                    self.menu_scroll = 0
-                                    self.menu_cursor = 0
-                        elif ev == EVENT_BACK:
-                            self.menu_visible = False
-                        elif ev == EVENT_UP and self.menu_visible:
-                            entries = build_flat_entries(self.shared_data) if build_flat_entries else []
-                            sel = get_selectable_count(entries) if entries else 0
-                            if sel:
-                                self.menu_cursor = max(0, self.menu_cursor - 1)
-                        elif ev == EVENT_DOWN and self.menu_visible:
-                            entries = build_flat_entries(self.shared_data) if build_flat_entries else []
-                            sel = get_selectable_count(entries) if entries else 0
-                            if sel:
-                                self.menu_cursor = min(sel - 1, self.menu_cursor + 1)
-                        elif ev == EVENT_SELECT and self.menu_visible and apply_select is not None:
-                            entries = build_flat_entries(self.shared_data) if build_flat_entries else []
-                            line_idx = cursor_to_line_index(entries, self.menu_cursor) if entries else 0
-                            if line_idx < len(entries):
-                                _, _, item = entries[line_idx]
-                                if item:
-                                    apply_select(self.shared_data, item)
+                    self._drain_dhm_menu_events()
 
                     if self.menu_visible:
                         self._render_settings_menu(image, draw)
@@ -1331,9 +1356,14 @@ class Display:
                             image.save(img_file)
                             img_file.flush()
                             os.fsync(img_file.fileno())
-                        # Snappier menu UX than full e-paper delay (Display HAT Mini is LCD)
-                        _delay = getattr(self.shared_data, "screen_delay", 1.0) or 1.0
-                        time.sleep(min(0.2, float(_delay)))
+                        # Snappier menu UX: keep draining buttons during frame wait (LCD)
+                        _delay = min(0.2, float(getattr(self.shared_data, "screen_delay", 1.0) or 1.0))
+                        elapsed = 0.0
+                        step = 0.04
+                        while elapsed < _delay and not self.shared_data.display_should_exit:
+                            self._drain_dhm_menu_events()
+                            time.sleep(step)
+                            elapsed += step
                         continue
 
                 # Check if button listener wants a different page

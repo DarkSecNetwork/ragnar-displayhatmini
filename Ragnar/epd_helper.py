@@ -22,6 +22,8 @@ class EPDHelper:
     def __init__(self, epd_type):
         self.epd_type = epd_type
         self.epd = self._load_epd_module()
+        # Display HAT Mini (ST7789): init() must not run every frame — resets driver / blocks GPIO timing
+        self._partial_init_done = False
 
     def _load_epd_module(self):
         try:
@@ -50,12 +52,16 @@ class EPDHelper:
 
     def init_partial_update(self):
         try:
+            if self.epd_type == "displayhatmini" and self._partial_init_done:
+                return
             if hasattr(self.epd, 'PART_UPDATE'):
                 self.epd.init(self.epd.PART_UPDATE)
             elif hasattr(self.epd, 'lut_partial_update'):
                 self.epd.init(self.epd.lut_partial_update)
             else:
                 self.epd.init()
+            if self.epd_type == "displayhatmini":
+                self._partial_init_done = True
             logger.info("EPD partial update initialization complete.")
         except Exception as e:
             logger.error(f"Error initializing EPD for partial update: {e}")
@@ -85,7 +91,10 @@ class EPDHelper:
                     self.epd.display_Partial(buf)
             else:
                 self.epd.display(buf)
-            logger.info("Partial display update complete.")
+            if self.epd_type != "displayhatmini":
+                logger.info("Partial display update complete.")
+            else:
+                logger.debug("Partial display update complete (displayhatmini).")
         except Exception as e:
             logger.error(f"Error during partial display update: {e} (image={image.size if hasattr(image,'size') else '?'}, epd={self.epd.width}x{self.epd.height}, buf_len={len(buf) if 'buf' in dir() else '?'})")
             raise

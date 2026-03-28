@@ -659,6 +659,14 @@ install_pisugar_support() {
     fi
     systemctl enable pisugar-server 2>/dev/null || true
     systemctl start pisugar-server 2>/dev/null || true
+    chmod +x "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" 2>/dev/null || true
+    if [[ -x "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" ]]; then
+      echo "Applying PiSugar boot ordering (I2C / udev)..."
+      "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" || echo "WARNING: install_pisugar_boot_dropin.sh reported an error (check logs)."
+    elif [[ -x "$INSTALLER_DIR/Ragnar/scripts/install_pisugar_boot_dropin.sh" ]]; then
+      chmod +x "$INSTALLER_DIR/Ragnar/scripts/install_pisugar_boot_dropin.sh" 2>/dev/null || true
+      "$INSTALLER_DIR/Ragnar/scripts/install_pisugar_boot_dropin.sh" || echo "WARNING: install_pisugar_boot_dropin.sh reported an error."
+    fi
   else
     echo "WARNING: PiSugar install failed or was cancelled. You can run it later:"
     echo "  curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh"
@@ -997,6 +1005,34 @@ fi
 # Create SSH file for headless setup (Raspberry Pi OS)
 touch /boot/ssh 2>/dev/null || touch /boot/firmware/ssh 2>/dev/null || true
 echo "SSH enabled and started"
+
+# Reachable on LAN / USB Ethernet: explicit listen (overrides accidental localhost-only main config)
+if [ -d /etc/ssh/sshd_config.d ]; then
+  _sshd_listen_dropin() {
+    cat > /etc/ssh/sshd_config.d/50-ragnar-ssh-listenall.conf <<'SSHLISTEN'
+# Ragnar installer: SSH on all interfaces (USB gadget + Wi-Fi + Ethernet)
+SSHLISTEN
+    printf '%s\n' "$1" >> /etc/ssh/sshd_config.d/50-ragnar-ssh-listenall.conf
+  }
+  if command -v sshd >/dev/null 2>&1; then
+    _sshd_listen_dropin $'ListenAddress 0.0.0.0\nListenAddress ::'
+    if ! sshd -t 2>/dev/null; then
+      echo "NOTE: sshd -t failed with IPv6 ListenAddress — retrying IPv4 only."
+      _sshd_listen_dropin 'ListenAddress 0.0.0.0'
+    fi
+    if sshd -t 2>/dev/null; then
+      systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+      echo "✓ sshd drop-in applied (50-ragnar-ssh-listenall.conf); config validated"
+    else
+      echo "WARNING: sshd -t still failing — removing 50-ragnar-ssh-listenall.conf"
+      rm -f /etc/ssh/sshd_config.d/50-ragnar-ssh-listenall.conf
+    fi
+  fi
+fi
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then
+  ufw allow OpenSSH 2>/dev/null || ufw allow 22/tcp 2>/dev/null || true
+  echo "✓ UFW: allowed OpenSSH (port 22)"
+fi
 
 echo "Applying boot-safe defaults (SPI + headless GPU split; backups + validation)..."
 echo "  (Optional: RAGNAR_INSTALLER_PERF_TUNING=1 enables legacy core_freq tweaks — not recommended on Pi Zero 2 W.)"
@@ -1726,6 +1762,7 @@ Wants=systemd-journald.socket
 Type=oneshot
 ExecStart=/usr/bin/python3 -OO $RAGNAR_DIR/scripts/ragnar_boot_display.py
 Environment=RAGNAR_BOOT_DISPLAY_SEC=45
+Environment=RAGNAR_NETWORK_SCREEN_SEC=10
 Environment=RAGNAR_DIR=$RAGNAR_DIR
 Environment=PYTHONUNBUFFERED=1
 TimeoutStartSec=120
@@ -1738,13 +1775,33 @@ DSVC
   chmod +x "$RAGNAR_DIR/scripts/ragnar_boot_display.py" 2>/dev/null || true
 fi
 
+# PiSugar: requirements.txt installs the pip package for everyone, but only users who opted in need the listener.
+# Without this, Ragnar keeps trying localhost pisugar-server and logs errors on every boot.
+PISUGAR_ENV_LINE=""
+if [[ ! "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
+  PISUGAR_ENV_LINE="Environment=RAGNAR_DISABLE_PISUGAR=1"
+fi
+# PiSugar 3: start Ragnar after pisugar-server so TCP client is not met with connection refused during boot.
+# Wants= (not Requires=) so Ragnar still starts if pisugar-server fails.
+PISUGAR_AFTER_SUFFIX=""
+PISUGAR_WANTS_SUFFIX=""
+if [[ "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
+  PISUGAR_AFTER_SUFFIX=" pisugar-server.service"
+  PISUGAR_WANTS_SUFFIX=" pisugar-server.service"
+  # Listener retries + background reconnect if server is slow after boot
+  PISUGAR_CONNECT_ENV="Environment=RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS=24
+Environment=RAGNAR_PISUGAR_RECONNECT_INTERVAL_SEC=45"
+else
+  PISUGAR_CONNECT_ENV=""
+fi
+
 echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
 Description=ragnar Service
 # Wait for routable network when NM/networkd publish network-online (reduces Wi-Fi race on boot)
-After=network-online.target network.target ssh.service$DISPLAY_AFTER_BOOT
-Wants=network-online.target$DISPLAY_WANTS_BOOT
+After=network-online.target network.target ssh.service$DISPLAY_AFTER_BOOT$PISUGAR_AFTER_SUFFIX
+Wants=network-online.target$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -1765,9 +1822,11 @@ StandardOutput=journal
 StandardError=journal
 # Environment
 Environment=PYTHONUNBUFFERED=1
-Environment=RAGNAR_DHM_BUTTON_DELAY=2.5
+Environment=RAGNAR_DHM_BUTTON_DELAY=1.0
 Environment=RAGNAR_GPIOZERO_FACTORY=lgpio
 $BOOT_SPLASH_ENV
+$PISUGAR_ENV_LINE
+$PISUGAR_CONNECT_ENV
 # Timeouts (start can be slow: splash + deferred init + display)
 TimeoutStartSec=120
 TimeoutStopSec=30
@@ -1835,7 +1894,7 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-onlin
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service
@@ -1908,6 +1967,10 @@ else
 fi
 
 install_pisugar_support
+if [[ "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]] && [[ -x "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" ]]; then
+  echo "Ensuring PiSugar systemd boot drop-in (idempotent)..."
+  "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" || echo "WARNING: PiSugar boot drop-in step failed (non-fatal)."
+fi
 install_pwnagotchi_bridge
 
 # Show network information

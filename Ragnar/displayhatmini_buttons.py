@@ -3,7 +3,7 @@
 # A = Toggle menu, B = Select (short) / Back (long or double-tap), X = Up, Y = Down
 #
 # RAGNAR_SKIP_DHM_BUTTONS=1 — skip gpiozero buttons (debug / PiSugar GPIO conflicts).
-# RAGNAR_DHM_BUTTON_DELAY — seconds to wait before attaching buttons (default 2.5).
+# RAGNAR_DHM_BUTTON_DELAY — seconds to wait before attaching buttons (default 1.0; increase if SPI races remain).
 # RAGNAR_GPIOZERO_FACTORY — force pin factory: lgpio | native | rpigpio (Bookworm/Pi 5: use lgpio).
 
 import logging
@@ -96,9 +96,9 @@ class DisplayHATMiniButtonListener:
             logger.info("Display HAT Mini buttons disabled (RAGNAR_SKIP_DHM_BUTTONS)")
             return
         try:
-            delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "2.5"))
+            delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "1.0"))
         except ValueError:
-            delay = 2.5
+            delay = 1.0
         delay = max(0.0, delay)
 
         def _run():

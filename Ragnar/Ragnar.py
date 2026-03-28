@@ -53,13 +53,15 @@ class Ragnar:
         # Reference to display instance (will be set when display is started)
         self.display = None
 
-        # PiSugar button listener (for Ragnar/Pwnagotchi swap via hardware button)
+        # PiSugar button listener (only if enabled — pip may install pisugar even without hardware)
         self.pisugar_listener = None
-        try:
-            from pisugar_button import PiSugarButtonListener
-            self.pisugar_listener = PiSugarButtonListener(shared_data)
-        except ImportError:
-            pass
+        _ps = os.environ.get("RAGNAR_DISABLE_PISUGAR", "").strip().lower()
+        if _ps not in ("1", "true", "yes"):
+            try:
+                from pisugar_button import PiSugarButtonListener
+                self.pisugar_listener = PiSugarButtonListener(shared_data)
+            except ImportError:
+                pass
 
     def run(self):
         """Main loop for Ragnar. Waits for Wi-Fi connection and starts Orchestrator."""

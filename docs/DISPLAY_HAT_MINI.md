@@ -81,7 +81,7 @@ The settings menu includes sections: Network (WiFi, Ethernet, Bluetooth), WiFi A
 
 Button GPIO pins (BCM): A=5, B=6, X=16, Y=24. If your HAT uses different pins, edit `Ragnar/displayhatmini_buttons.py` and adjust `PIN_A`, `PIN_B`, `PIN_X`, `PIN_Y`.
 
-**Startup delay:** Buttons attach after **2.5 s** by default so SPI/display init can finish first. Override with `RAGNAR_DHM_BUTTON_DELAY` (seconds, e.g. `0` for immediate).
+**Startup delay:** Buttons attach after **~1 s** by default so SPI/display init can finish first. Override with `RAGNAR_DHM_BUTTON_DELAY` (seconds, e.g. `0` for immediate). The display loop also drains button events during frame waits so the menu stays responsive.
 
 **Disable buttons (debug):** Set `RAGNAR_SKIP_DHM_BUTTONS=1` in the systemd environment for `ragnar.service` if you need to rule out gpiozero vs display/GPIO issues.
 

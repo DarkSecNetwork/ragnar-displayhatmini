@@ -27,7 +27,8 @@ Pins match the Pimoroni Display HAT Mini. If you use a clone with different wiri
 | Variable | Effect |
 |----------|--------|
 | `RAGNAR_SKIP_DHM_BUTTONS=1` | Do not attach gpiozero buttons. Use to debug a blank display or GPIO conflicts; the main UI still runs. |
-| `RAGNAR_DHM_BUTTON_DELAY` | Seconds to wait after process start before attaching buttons (default **2.5**). Lets SPI/display init finish first. Set `0` for immediate attach. |
+| `RAGNAR_DHM_BUTTON_DELAY` | Seconds to wait after process start before attaching buttons (default **1.0**). Lets SPI/display init finish first; increase if you see rare races. Set `0` for immediate attach. |
+| `RAGNAR_DHM_LOG_EVENTS` | Set to `1` to log each queued button event (`menu_toggle`, `up`, …) to the Ragnar log for debugging. |
 | `RAGNAR_GPIOZERO_FACTORY` | Pin backend for gpiozero: **`lgpio`** (default via service on Bookworm), `native`, or `rpigpio`. The panel driver uses **gpiodevice**; menu buttons need **lgpio** + `python3-lgpio` so presses are seen reliably. |
 
 Example for `ragnar.service` under `[Service]`:
@@ -40,7 +41,8 @@ Environment=RAGNAR_DHM_BUTTON_DELAY=3
 
 1. **`displayhatmini_buttons.py`**  
    - `DisplayHATMiniButtonListener` queues string events: `menu_toggle`, `up`, `down`, `select`, `back`.  
-   - Callbacks run on gpiozero’s thread; the queue is thread-safe.
+   - Callbacks run on gpiozero’s thread; the queue is thread-safe.  
+   - **`display.py`** drains this queue from the main display loop **and** during frame sleeps so inputs are not starved by long `screen_delay` or menu sleeps (see `_drain_dhm_menu_events`, `_sleep_interruptible`).
 
 2. **`displayhatmini_menu.py`**  
    - `MENU_STRUCTURE`: sections and items (`toggle`, `readonly`, `text`, `action`).  
@@ -67,7 +69,8 @@ Environment=RAGNAR_DHM_BUTTON_DELAY=3
 | Symptom | What to check |
 |---------|----------------|
 | No response to buttons | `journalctl -u ragnar` for `Display HAT Mini buttons started` or gpiozero errors. Confirm `RAGNAR_SKIP_DHM_BUTTONS` is unset. |
-| Buttons dead for ~2.5 s after start | Expected: default delay. Lower `RAGNAR_DHM_BUTTON_DELAY` if safe on your hardware. |
+| Buttons dead for ~1 s after start | Expected: default delay. Set `RAGNAR_DHM_LOG_EVENTS=1` to verify events; lower delay or `0` if safe. |
+| Buttons unresponsive after main UI loads | Fixed in current `display.py` + `epd_helper`: LCD was re-inited every frame; DHM events were only drained once per long sleep. Reinstall or sync `epd_helper.py` / `display.py`. |
 | Blank display with PiSugar | Regenerate `displayhatmini.py` with a current installer (no RPi.GPIO on backlight). See [DISPLAY_HAT_MINI.md](../docs/DISPLAY_HAT_MINI.md#pisugar-stacked--blank-display). |
 | `gpiozero` / pin errors | GPIO in use by another service, wrong overlay, or insufficient permissions. |
 | Menu never appears | `epd_type` must be exactly `displayhatmini`. Import errors for `displayhatmini_menu` / `displayhatmini_buttons` disable the feature. |
