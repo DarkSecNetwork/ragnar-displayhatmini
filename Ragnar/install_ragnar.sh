@@ -565,12 +565,24 @@ install_pisugar_server() {
         return 0
     fi
 
-    log "INFO" "Installing PiSugar power manager server..."
-    echo -e "${BLUE}Downloading and installing PiSugar power manager...${NC}"
-
-    if curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash; then
+    log "INFO" "Installing PiSugar power manager server (PiSugar 3 vendor: -c release)..."
+    echo -e "${BLUE}Downloading PiSugar power manager from cdn.pisugar.com (HTTPS)...${NC}"
+    # https://github.com/PiSugar/PiSugar/wiki/PiSugar-3-Series#software-installation
+    PISUGAR_URL="https://cdn.pisugar.com/release/pisugar-power-manager.sh"
+    PISUGAR_TMP="$(mktemp /tmp/pisugar-power-manager-XXXXXX.sh)"
+    if ! curl -sSL -f "$PISUGAR_URL" -o "$PISUGAR_TMP"; then
+        log "WARNING" "Could not download PiSugar installer"
+        echo -e "${YELLOW}⚠ Download failed${NC}"
+        rm -f "$PISUGAR_TMP"
+        echo -e "${YELLOW}  curl -sSL $PISUGAR_URL -o /tmp/p.sh && sudo bash /tmp/p.sh -c release${NC}"
+        return 1
+    fi
+    chmod +x "$PISUGAR_TMP"
+    # Run from file (not curl|bash) so vendor whiptail/dialog can use the terminal; -c release per wiki.
+    if sudo bash "$PISUGAR_TMP" -c release; then
         log "SUCCESS" "PiSugar server installed successfully"
         echo -e "${GREEN}✓ PiSugar server installed${NC}"
+        echo -e "${BLUE}Optional PiSugar 3 firmware OTA:${NC} curl -sSL https://cdn.pisugar.com/release/PiSugarUpdate.sh | sudo bash"
 
         # Enable and start the service
         if systemctl enable pisugar-server 2>/dev/null; then
@@ -582,9 +594,10 @@ install_pisugar_server() {
     else
         log "WARNING" "PiSugar server installation failed"
         echo -e "${YELLOW}⚠ PiSugar server installation failed${NC}"
-        echo -e "${YELLOW}  You can install it manually later:${NC}"
-        echo -e "${YELLOW}  curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash${NC}"
+        echo -e "${YELLOW}  Manual install (PiSugar 3 wiki):${NC}"
+        echo -e "${YELLOW}  curl -sSL https://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh -c release${NC}"
     fi
+    rm -f "$PISUGAR_TMP"
 }
 
 configure_interfaces() {

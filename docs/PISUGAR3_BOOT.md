@@ -1,5 +1,24 @@
 # PiSugar 3 and Ragnar — boot / reboot stability
 
+## Official PiSugar 3 software (vendor)
+
+Ragnar’s installer uses the same entry point as the [PiSugar 3 Series wiki](https://github.com/PiSugar/PiSugar/wiki/PiSugar-3-Series#software-installation):
+
+```bash
+curl -sSL https://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/pisugar-power-manager.sh
+sudo bash /tmp/pisugar-power-manager.sh -c release
+```
+
+**Firmware OTA** (PiSugar 3 MCU; do with hardware attached): [OTA firmware upgrade](https://github.com/PiSugar/PiSugar/wiki/PiSugar-3-Series#%EF%B8%8F-ota-firmware-upgrade)
+
+```bash
+curl -sSL https://cdn.pisugar.com/release/PiSugarUpdate.sh | sudo bash
+```
+
+I2C addresses **0x57 / 0x68** and RTC notes are documented on that wiki (e.g. **RTC on board** section).
+
+---
+
 ## Typical errors (exact messages vary by OS and `pisugar-server` build)
 
 | Source | Example message | Meaning |

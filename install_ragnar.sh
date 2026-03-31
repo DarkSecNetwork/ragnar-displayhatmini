@@ -630,30 +630,34 @@ install_pisugar_support() {
     return 0
   fi
   echo "========================================"
-  echo " PiSugar power manager"
+  echo " PiSugar power manager (PiSugar 3 — vendor release channel)"
   echo "========================================"
-  # Do NOT use: curl ... | bash  — that feeds the script on stdin, so whiptail/dialog
-  # cannot read keyboard input and model selection appears broken.
-  # Run from a file so stdin stays the terminal (use: ssh -t user@pi for SSH).
+  # Official flow: https://github.com/PiSugar/PiSugar/wiki/PiSugar-3-Series#software-installation
+  #   wget https://cdn.pisugar.com/release/pisugar-power-manager.sh
+  #   bash pisugar-power-manager.sh -c release
+  # Do NOT use: curl ... | bash — that feeds the script on stdin, so whiptail/dialog
+  # cannot read keyboard input. Run from a file so stdin stays the terminal (ssh -t).
+  PISUGAR_URL="https://cdn.pisugar.com/release/pisugar-power-manager.sh"
   PISUGAR_TMP="$(mktemp /tmp/pisugar-power-manager-XXXXXX.sh)"
-  if ! curl -sSL -f "http://cdn.pisugar.com/release/pisugar-power-manager.sh" -o "$PISUGAR_TMP"; then
+  if ! curl -sSL -f "$PISUGAR_URL" -o "$PISUGAR_TMP"; then
     echo "WARNING: Could not download PiSugar installer."
     rm -f "$PISUGAR_TMP"
     return 1
   fi
   chmod +x "$PISUGAR_TMP"
   if [ -t 0 ]; then
-    echo "Interactive mode: you can choose your PiSugar model in the prompts."
-    echo "(If prompts still fail, use: ssh -t ... so SSH allocates a terminal.)"
+    echo "Using vendor -c release channel (see PiSugar 3 wiki). Model prompts may still appear."
+    echo "(If prompts fail, use: ssh -t ... so SSH allocates a terminal.)"
     unset DEBIAN_FRONTEND
   else
-    echo "WARNING: No TTY on stdin — interactive PiSugar dialogs will not work."
-    echo "Re-run this installer from a real terminal, or run manually after install:"
-    echo "  curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh"
+    echo "WARNING: No TTY on stdin — if install fails, use ssh -t or a local console, then:"
+    echo "  curl -sSL $PISUGAR_URL -o /tmp/p.sh && sudo bash /tmp/p.sh -c release"
     export DEBIAN_FRONTEND=noninteractive
   fi
-  if bash "$PISUGAR_TMP"; then
+  if bash "$PISUGAR_TMP" -c release; then
     echo "PiSugar installer finished."
+    echo "PiSugar 3 OTA firmware (optional, with hardware attached):"
+    echo "  curl -sSL https://cdn.pisugar.com/release/PiSugarUpdate.sh | sudo bash"
     if [ ! -t 0 ]; then
       echo "If hardware is attached, run: sudo dpkg-reconfigure pisugar-server"
     fi
@@ -668,8 +672,8 @@ install_pisugar_support() {
       "$INSTALLER_DIR/Ragnar/scripts/install_pisugar_boot_dropin.sh" || echo "WARNING: install_pisugar_boot_dropin.sh reported an error."
     fi
   else
-    echo "WARNING: PiSugar install failed or was cancelled. You can run it later:"
-    echo "  curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh"
+    echo "WARNING: PiSugar install failed or was cancelled. Run manually (PiSugar 3 wiki):"
+    echo "  curl -sSL https://cdn.pisugar.com/release/pisugar-power-manager.sh -o /tmp/p.sh && sudo bash /tmp/p.sh -c release"
   fi
   rm -f "$PISUGAR_TMP"
 }

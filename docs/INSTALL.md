@@ -15,7 +15,7 @@ When imaging, set **hostname** and **username** to `ragnar` so the installer and
   - Kernel 6.6, Debian GNU/Linux 13 (trixie)
 - **Hostname and username:** `ragnar` (set in Pi Imager or on first boot).
 - **Display:** 2.13" e-Paper HAT (V1–V4, 2.7", 2.9", 3.7") or **Display HAT Mini** (320×240 IPS LCD). Connect before install.
-- **Optional:** [PiSugar UPS](https://www.pisugar.com/) — the installer can install `pisugar-server` if you answer **y** when prompted. The PiSugar script shows **model selection and other prompts** only when the installer has a real terminal: use **`ssh -t ragnar@<pi-ip>`** (note **`-t`**) or run `sudo ./install_ragnar.sh` from the Pi’s desktop terminal. **`curl … | bash` was removed** for PiSugar because it breaks interactive input; the script is downloaded and run from a file so your keyboard works.
+- **Optional:** [PiSugar 3 / UPS](https://www.pisugar.com/) — the installer runs PiSugar’s official **Power Manager** script from [PiSugar 3 Series (wiki)](https://github.com/PiSugar/PiSugar/wiki/PiSugar-3-Series#software-installation): **`https://cdn.pisugar.com/release/pisugar-power-manager.sh`** with **`-c release`**, matching their documented install. The vendor script may still show **model selection**; use **`ssh -t ragnar@<pi-ip>`** or a local console so prompts work. The installer **does not** pipe `curl … | bash` (that breaks whiptail); it saves the script and runs it from a file. After hardware is attached, optional firmware OTA: `curl -sSL https://cdn.pisugar.com/release/PiSugarUpdate.sh | sudo bash` (see wiki **OTA firmware upgrade**).
 
 E-Paper V2 and V4 are well tested; V1 and V3 should work. Display HAT Mini is fully supported (option 9 in the installer).
 
