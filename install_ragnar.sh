@@ -263,6 +263,9 @@ configure_static_ip() {
   fi
 
   echo ""
+  echo "Tip: at each prompt, press Enter to accept the value in [brackets]."
+
+  echo ""
   echo "Which interface should receive the static IPv4 address?"
   echo "  1) wlan0 — Wi-Fi"
   echo "  2) eth0 — Ethernet"
@@ -281,16 +284,23 @@ configure_static_ip() {
     echo "Example: Pi usb0 = 192.168.7.2, set the PC's RNDIS/USB Ethernet adapter to 192.168.7.1/24."
     read -p "Static IPv4 for usb0 [192.168.7.2]: " STATIC_IP
     STATIC_IP="${STATIC_IP:-192.168.7.2}"
-    read -p "Gateway for usb0 (optional; e.g. PC 192.168.7.1) or Enter for none: " STATIC_GATEWAY
-    STATIC_GATEWAY="${STATIC_GATEWAY:-}"
-    read -p "DNS for usb0 (optional) [8.8.8.8]: " STATIC_DNS
+    read -p "Gateway for usb0 [192.168.7.1] (type 'none' for no gateway): " STATIC_GATEWAY
+    if [[ -z "${STATIC_GATEWAY// }" ]]; then
+      STATIC_GATEWAY="192.168.7.1"
+    elif [[ "$STATIC_GATEWAY" =~ ^(none|NONE|-)$ ]]; then
+      STATIC_GATEWAY=""
+    fi
+    read -p "DNS for usb0 [8.8.8.8]: " STATIC_DNS
     STATIC_DNS="${STATIC_DNS:-8.8.8.8}"
   else
-    # wlan0 / eth0: detect or ask
+    # wlan0 / eth0: detect or ask (Enter = defaults derived from LAN or 192.168.1.x)
     echo ""
     echo "Selected interface: $ACTIVE_INTERFACE"
     CURRENT_IP=$(ip addr show "$ACTIVE_INTERFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     CURRENT_GATEWAY=$(ip route | grep default | awk '{print $3}' | head -1)
+    DEF_GW="${CURRENT_GATEWAY:-192.168.1.1}"
+    DEF_SUB=$(echo "$DEF_GW" | cut -d. -f1-3)
+    DEF_IP="${DEF_SUB}.100"
     if [ -n "$CURRENT_IP" ]; then
       echo "Current IP on $ACTIVE_INTERFACE: $CURRENT_IP"
       echo "Current default gateway: ${CURRENT_GATEWAY:-unknown}"
@@ -300,14 +310,26 @@ configure_static_ip() {
         STATIC_IP="$CURRENT_IP"
         STATIC_GATEWAY="${CURRENT_GATEWAY:-}"
       else
-        read -p "Enter static IP address (e.g., 192.168.1.100): " STATIC_IP
-        read -p "Enter gateway/router IP (e.g., 192.168.1.1): " STATIC_GATEWAY
+        read -p "Static IPv4 for $ACTIVE_INTERFACE [$DEF_IP]: " STATIC_IP
+        STATIC_IP="${STATIC_IP:-$DEF_IP}"
+        read -p "Gateway [$DEF_GW] (type 'none' for no gateway): " STATIC_GATEWAY
+        if [[ -z "${STATIC_GATEWAY// }" ]]; then
+          STATIC_GATEWAY="$DEF_GW"
+        elif [[ "$STATIC_GATEWAY" =~ ^(none|NONE|-)$ ]]; then
+          STATIC_GATEWAY=""
+        fi
       fi
     else
-      read -p "Enter static IP address (e.g., 192.168.1.100): " STATIC_IP
-      read -p "Enter gateway/router IP (e.g., 192.168.1.1): " STATIC_GATEWAY
+      read -p "Static IPv4 for $ACTIVE_INTERFACE [$DEF_IP]: " STATIC_IP
+      STATIC_IP="${STATIC_IP:-$DEF_IP}"
+      read -p "Gateway [$DEF_GW] (type 'none' for no gateway): " STATIC_GATEWAY
+      if [[ -z "${STATIC_GATEWAY// }" ]]; then
+        STATIC_GATEWAY="$DEF_GW"
+      elif [[ "$STATIC_GATEWAY" =~ ^(none|NONE|-)$ ]]; then
+        STATIC_GATEWAY=""
+      fi
     fi
-    read -p "Enter DNS servers (default: 8.8.8.8 1.1.1.1): " STATIC_DNS
+    read -p "DNS servers [8.8.8.8 1.1.1.1]: " STATIC_DNS
     STATIC_DNS="${STATIC_DNS:-8.8.8.8 1.1.1.1}"
   fi
 
@@ -438,14 +460,14 @@ configure_static_ip() {
   if [ -f "$DHCPCD_CONF" ]; then
     cp "$DHCPCD_CONF" "${DHCPCD_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
     sed -i "/^interface $ACTIVE_INTERFACE$/,/^$/d" "$DHCPCD_CONF"
-    cat >>"$DHCPCD_CONF" <<EOF
-
-# Static IP configuration for $ACTIVE_INTERFACE (configured by Ragnar installer)
-interface $ACTIVE_INTERFACE
-static ip_address=$STATIC_IP_WITH_MASK
-static routers=$STATIC_GATEWAY
-static domain_name_servers=$STATIC_DNS
-EOF
+    {
+      echo ""
+      echo "# Static IP configuration for $ACTIVE_INTERFACE (configured by Ragnar installer)"
+      echo "interface $ACTIVE_INTERFACE"
+      echo "static ip_address=$STATIC_IP_WITH_MASK"
+      [ -n "$STATIC_GATEWAY" ] && echo "static routers=$STATIC_GATEWAY"
+      echo "static domain_name_servers=$STATIC_DNS"
+    } >>"$DHCPCD_CONF"
     echo "Static IP configuration added to $DHCPCD_CONF"
   fi
 
