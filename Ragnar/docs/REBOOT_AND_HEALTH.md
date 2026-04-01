@@ -7,7 +7,7 @@ This document describes why Ragnar can differ **manually vs systemd**, what was 
 | Issue | Evidence | Mitigation |
 |--------|-----------|------------|
 | **Solid green ACT / “no boot” after install** | Installer used `dtparam=act_led_trigger=none` (no SD-activity blink) and fixed `core_freq` — looks like a hang or destabilizes some boards. | v6.3+: no ACT override by default; `core_freq` only if `RAGNAR_INSTALLER_PERF_TUNING=1`; `validate_boot_files.sh` + `*.ragnar.bak` backups. |
-| **Wi-Fi / IP not ready at service start** | `After=network.target` does not wait for DHCP; orchestrator/display race with NM. | `After=` + `Wants=network-online.target`; enable `NetworkManager-wait-online.service` when present. |
+| **Wi-Fi / IP not ready at service start** | `After=network.target` does not wait for DHCP; orchestrator/display race with NM. | `Wants=network-online.target` (optional); **`ragnar.service` does not use `After=network-online.target`** so a bad Wi-Fi config cannot block the UI for minutes. |
 | **Static IP ignored (Bookworm)** | Only `dhcpcd.conf` written while **NetworkManager** owns `wlan0`. | Installer uses **`nmcli`** when NM is active (see `install_ragnar.sh` `configure_static_ip`). |
 | **GPIO / display busy in verifier** | Second `EPD().init()` while `ragnar.service` holds lines → `EBUSY`. | Verifier treats busy as skip; self-test avoids display init unless `RAGNAR_SELFTEST_DISPLAY_INIT=1`. |
 | **Menu buttons dead** | `st7789` uses **gpiodevice**; gpiozero default backend wrong on Bookworm. | `RAGNAR_GPIOZERO_FACTORY=lgpio`, `python3-lgpio`, `gpiozero>=2.0`. |

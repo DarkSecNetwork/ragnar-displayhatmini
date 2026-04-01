@@ -1785,11 +1785,11 @@ fi
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing ragnar-display.service (boot log on HAT Mini, before ragnar)..."
   if [[ "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
-    BOOT_PISUGAR_ENV="Environment=RAGNAR_BOOT_PISUGAR_SCREEN_SEC=16"
+    BOOT_PISUGAR_ENV="Environment=RAGNAR_BOOT_PISUGAR_SCREEN_SEC=12"
   else
     BOOT_PISUGAR_ENV="Environment=RAGNAR_BOOT_PISUGAR_SCREEN_SEC=0"
   fi
-  BOOT_BTN_ENV="Environment=RAGNAR_BOOT_BUTTON_HELP_SEC=10"
+  BOOT_BTN_ENV="Environment=RAGNAR_BOOT_BUTTON_HELP_SEC=8"
   cat > /etc/systemd/system/ragnar-display.service <<DSVC
 [Unit]
 Description=Ragnar boot journal on Display HAT Mini
@@ -1801,13 +1801,13 @@ Wants=systemd-journald.socket
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 -OO $RAGNAR_DIR/scripts/ragnar_boot_display.py
-Environment=RAGNAR_BOOT_DISPLAY_SEC=45
-Environment=RAGNAR_NETWORK_SCREEN_SEC=10
+Environment=RAGNAR_BOOT_DISPLAY_SEC=35
+Environment=RAGNAR_NETWORK_SCREEN_SEC=8
 $BOOT_PISUGAR_ENV
 $BOOT_BTN_ENV
 Environment=RAGNAR_DIR=$RAGNAR_DIR
 Environment=PYTHONUNBUFFERED=1
-TimeoutStartSec=180
+TimeoutStartSec=240
 StandardOutput=journal
 StandardError=journal
 
@@ -1842,8 +1842,9 @@ echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
 Description=ragnar Service
-# Wait for routable network when NM/networkd publish network-online (reduces Wi-Fi race on boot)
-After=network-online.target network.target ssh.service$DISPLAY_AFTER_BOOT$PISUGAR_AFTER_SUFFIX
+# After=network.target (not network-online): waiting for DHCP/Wi-Fi "online" can block ragnar for minutes
+# if Wi-Fi fails — leaving you with no UI and a "stuck" boot. WiFiManager retries inside Ragnar.
+After=network.target ssh.service$DISPLAY_AFTER_BOOT$PISUGAR_AFTER_SUFFIX
 Wants=network-online.target$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -1871,7 +1872,7 @@ $BOOT_SPLASH_ENV
 $PISUGAR_ENV_LINE
 $PISUGAR_CONNECT_ENV
 # Timeouts (start can be slow: splash + deferred init + display)
-TimeoutStartSec=120
+TimeoutStartSec=180
 TimeoutStopSec=30
 
 [Install]

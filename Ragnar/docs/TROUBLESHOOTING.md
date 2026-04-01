@@ -4,6 +4,16 @@
 
 See **[REBOOT_AND_HEALTH.md](REBOOT_AND_HEALTH.md)** for `network-online.target` ordering, pre-reboot checks, and **`safe_reboot.sh`**.
 
+## No Ragnar UI after boot / solid green ACT LED
+
+| Symptom | What it usually means | What to do |
+|--------|------------------------|------------|
+| **Blank HAT** after minutes | **`ragnar` never started** (stuck waiting), **`ragnar-display` hung** (SPI), or **Python crash** on boot | From another PC: `ssh ragnar@<ip>` → `sudo journalctl -b -u ragnar -u ragnar-display --no-pager \| tail -120` |
+| **Solid green** (ACT) | On many Pis the green LED is **SD activity**, not “OK”. **Solid** often means **no mmc activity** (stuck before OS, **undervoltage**, bad **SD**, or **early hang**). | **5 V power** (adequate A), reseat **SD**, try **`fsck`** / re-image if repeats. See [REBOOT_AND_HEALTH.md](REBOOT_AND_HEALTH.md). |
+| Wi-Fi never gets IP | **`network-online`** can delay services that **order after** it | Current installer uses **`After=network.target`** for **`ragnar.service`** so Ragnar can start **without** waiting for DHCP. If you still have an old unit file, run the latest **`install_ragnar.sh`** or **`systemctl edit ragnar`** and remove **`network-online.target`** from **`After=`**. |
+| Boot splash too long | Long journal + network + PiSugar + button screens | Shorten: `sudo systemctl edit ragnar-display` → set **`RAGNAR_BOOT_DISPLAY_SEC=15`**, **`RAGNAR_NETWORK_SCREEN_SEC=0`**, **`RAGNAR_BOOT_PISUGAR_SCREEN_SEC=0`**, **`RAGNAR_BOOT_BUTTON_HELP_SEC=0`**, then **`daemon-reload`**, **`reboot`**. Or **`sudo systemctl mask ragnar-display`** to skip splash and free the LCD faster. |
+| SPI still busy | **`ragnar-display` crashed** without releasing SPI | **`sudo systemctl restart ragnar`** or **`reboot`**. The boot script now always calls **`module_exit()`** in a **`finally`** block so the panel is released even on errors. |
+
 ## SSH over USB (gadget / usb0)
 
 See **[USB_SSH_GADGET.md](USB_SSH_GADGET.md)** and run **`sudo /home/ragnar/Ragnar/scripts/check_usb_ssh.sh`** on the Pi.

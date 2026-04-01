@@ -173,84 +173,87 @@ def main() -> int:
     ok_fg = (120, 255, 140)
 
     try:
-        while time.time() - start < RUN_SEC:
+        try:
+            while time.time() - start < RUN_SEC:
+                try:
+                    while True:
+                        row = _format_log_row(q.get_nowait())
+                        if row:
+                            lines_buf.append(row)
+                except queue.Empty:
+                    pass
+                if len(lines_buf) > MAX_LINES + 40:
+                    lines_buf = lines_buf[-(MAX_LINES + 40) :]
+
+                now = time.time()
+                if now - last_draw < MIN_REDRAW_INTERVAL:
+                    time.sleep(0.02)
+                    continue
+                last_draw = now
+
+                img = Image.new("RGB", (w, h), bg)
+                draw = ImageDraw.Draw(img)
+                draw.rectangle((0, 0, w - 1, 18), outline=(60, 60, 60))
+                draw.text((2, 1), TITLE, font=font_title, fill=(255, 255, 255))
+
+                margin_x = 2
+                max_text_w = max(40, w - 2 * margin_x)
+                y = 22
+                row_h = 13
+                visible = lines_buf[-MAX_LINES:]
+                for row in visible:
+                    col = fg
+                    if row.startswith("[ERR]"):
+                        col = err_fg
+                    elif row.startswith("[WRN]"):
+                        col = warn_fg
+                    elif row.startswith("[OK]"):
+                        col = ok_fg
+                    if ellipsis_fit_to_width is not None:
+                        fit = ellipsis_fit_to_width(draw, row, font_body, max_text_w)
+                    else:
+                        fit = row[: max(20, w // 6)]
+                    draw.text((margin_x, y), fit, font=font_body, fill=col)
+                    y += row_h
+                    if y > h - 4:
+                        break
+
+                try:
+                    epd.display(img)
+                except Exception as e:
+                    print(f"ragnar_boot_display: frame error: {e}", file=sys.stderr)
+
+                time.sleep(0.03)
+        finally:
+            stop.set()
+
+        # --- Phase 2: network + SSH (keep SPI open — do not module_exit before this) ---
+        if NETWORK_SEC > 0.5 and collect_network_facts is not None:
             try:
-                while True:
-                    row = _format_log_row(q.get_nowait())
-                    if row:
-                        lines_buf.append(row)
-            except queue.Empty:
-                pass
-            if len(lines_buf) > MAX_LINES + 40:
-                lines_buf = lines_buf[-(MAX_LINES + 40) :]
-
-            now = time.time()
-            if now - last_draw < MIN_REDRAW_INTERVAL:
-                time.sleep(0.02)
-                continue
-            last_draw = now
-
-            img = Image.new("RGB", (w, h), bg)
-            draw = ImageDraw.Draw(img)
-            draw.rectangle((0, 0, w - 1, 18), outline=(60, 60, 60))
-            draw.text((2, 1), TITLE, font=font_title, fill=(255, 255, 255))
-
-            margin_x = 2
-            max_text_w = max(40, w - 2 * margin_x)
-            y = 22
-            row_h = 13
-            visible = lines_buf[-MAX_LINES:]
-            for row in visible:
-                col = fg
-                if row.startswith("[ERR]"):
-                    col = err_fg
-                elif row.startswith("[WRN]"):
-                    col = warn_fg
-                elif row.startswith("[OK]"):
-                    col = ok_fg
-                if ellipsis_fit_to_width is not None:
-                    fit = ellipsis_fit_to_width(draw, row, font_body, max_text_w)
-                else:
-                    fit = row[: max(20, w // 6)]
-                draw.text((margin_x, y), fit, font=font_body, fill=col)
-                y += row_h
-                if y > h - 4:
-                    break
-
-            try:
-                epd.display(img)
+                _show_network_screen(epd, w, h, font_title, font_body, NETWORK_SEC)
             except Exception as e:
-                print(f"ragnar_boot_display: frame error: {e}", file=sys.stderr)
+                print(f"ragnar_boot_display: network screen error: {e}", file=sys.stderr)
 
-            time.sleep(0.03)
+        if PISUGAR_BOOT_SEC > 0.5 and collect_pisugar_boot_facts is not None:
+            try:
+                half = PISUGAR_BOOT_SEC / 2.0
+                _show_pisugar_status_screen(epd, w, h, font_title, font_body, half)
+                _show_pisugar_i2c_screen(epd, w, h, font_title, font_tiny, half)
+            except Exception as e:
+                print(f"ragnar_boot_display: PiSugar boot screen error: {e}", file=sys.stderr)
+
+        if BUTTON_HELP_SEC > 0.5:
+            try:
+                _show_button_help_screen(epd, w, h, font_title, font_body, BUTTON_HELP_SEC)
+            except Exception as e:
+                print(f"ragnar_boot_display: button help screen error: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"ragnar_boot_display: fatal: {e}", file=sys.stderr)
     finally:
-        stop.set()
-
-    # --- Phase 2: network + SSH (keep SPI open — do not module_exit before this) ---
-    if NETWORK_SEC > 0.5 and collect_network_facts is not None:
         try:
-            _show_network_screen(epd, w, h, font_title, font_body, NETWORK_SEC)
-        except Exception as e:
-            print(f"ragnar_boot_display: network screen error: {e}", file=sys.stderr)
-
-    if PISUGAR_BOOT_SEC > 0.5 and collect_pisugar_boot_facts is not None:
-        try:
-            half = PISUGAR_BOOT_SEC / 2.0
-            _show_pisugar_status_screen(epd, w, h, font_title, font_body, half)
-            _show_pisugar_i2c_screen(epd, w, h, font_title, font_tiny, half)
-        except Exception as e:
-            print(f"ragnar_boot_display: PiSugar boot screen error: {e}", file=sys.stderr)
-
-    if BUTTON_HELP_SEC > 0.5:
-        try:
-            _show_button_help_screen(epd, w, h, font_title, font_body, BUTTON_HELP_SEC)
-        except Exception as e:
-            print(f"ragnar_boot_display: button help screen error: {e}", file=sys.stderr)
-
-    try:
-        epd.module_exit()
-    except Exception:
-        pass
+            epd.module_exit()
+        except Exception:
+            pass
 
     print("ragnar_boot_display: finished", file=sys.stderr)
     return 0
