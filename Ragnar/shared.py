@@ -616,7 +616,9 @@ class SharedData:
             "pwnagotchi_installed": False,
             "pwnagotchi_mode": "ragnar",
             "pwnagotchi_last_switch": "",
-            "pwnagotchi_last_status": "Not installed"
+            "pwnagotchi_last_status": "Not installed",
+            # Display HAT Mini menu: when True, Ragnar skips PiSugar listener (next boots too until OFF)
+            "pisugar_disconnect_next_boot": False,
         }
 
     def apply_display_profile(self, epd_type=None, set_orientation_if_missing=False, persist=False):

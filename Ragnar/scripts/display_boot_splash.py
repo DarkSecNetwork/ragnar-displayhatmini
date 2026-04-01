@@ -4,13 +4,23 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+_R = Path(__file__).resolve().parent.parent
+if str(_R) not in sys.path:
+    sys.path.insert(0, str(_R))
+try:
+    from display_text_util import compact_journal_line, ellipsis_fit_to_width
+except ImportError:
+    compact_journal_line = lambda s: (s or "").strip()
+    ellipsis_fit_to_width = None  # type: ignore[misc, assignment]
 
 
-def _get_boot_log_lines(max_lines=10, line_chars=48):
-    """Return last N lines of current-boot journal, each line wrapped to line_chars."""
+def _get_boot_log_lines(max_lines=12):
+    """Return last journal lines for this boot (message text compacted)."""
     try:
         out = subprocess.check_output(
-            ["journalctl", "-b", "-n", str(max_lines * 2), "--no-pager", "-o", "short-iso"],
+            ["journalctl", "-b", "-n", str(max_lines * 3), "--no-pager", "-o", "short-iso"],
             timeout=5,
             text=True,
         )
@@ -21,14 +31,7 @@ def _get_boot_log_lines(max_lines=10, line_chars=48):
         raw = (raw or "").strip()
         if not raw:
             continue
-        # Strip leading timestamp for brevity: "2025-03-15T12:34:56+00:00 hostname msg" -> "msg" or keep last part
-        if len(raw) > line_chars:
-            # Wrap long lines
-            while raw:
-                lines.append(raw[:line_chars])
-                raw = raw[line_chars:].lstrip()
-        else:
-            lines.append(raw)
+        lines.append(compact_journal_line(raw))
         if len(lines) >= max_lines:
             break
     return lines[-max_lines:] if len(lines) > max_lines else lines
@@ -95,16 +98,21 @@ def main():
         epd.display(img)
         time.sleep(2.0)
 
-        # 3) System log (last boot messages)
-        log_lines = _get_boot_log_lines(max_lines=10, line_chars=48)
+        # 3) System log (last boot messages; width fit to pixels so text is not clipped)
+        log_lines = _get_boot_log_lines(max_lines=12)
         img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
         draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
         draw.text((4, 2), "Boot log:", font=font_small, fill=FG)
         y = 16
+        max_tw = max(40, W - 8)
         for line in log_lines:
             if y + 14 > H:
                 break
-            draw.text((4, y), line[:52], font=font_small, fill=FG)
+            if ellipsis_fit_to_width is not None and font_small:
+                shown = ellipsis_fit_to_width(draw, line, font_small, max_tw)
+            else:
+                shown = (line or "")[: max(20, W // 6)]
+            draw.text((4, y), shown, font=font_small, fill=FG)
             y += 13
         epd.display(img)
         time.sleep(6.0)

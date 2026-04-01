@@ -11,7 +11,8 @@ Requires pisugar-server running and the `pisugar` Python package.
 Connection is via TCP to localhost (default pisugar-server setup).
 
 Env:
-  RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS — tries per wave before pausing (default 24)
+  RAGNAR_PISUGAR_BOOT_CONNECT_TRIES — first-wave TCP attempts before session bypass (default 3)
+  RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS — tries per later wave before pausing (default 24)
   RAGNAR_PISUGAR_RECONNECT_INTERVAL_SEC — seconds between waves if server is down (default 45)
 """
 
@@ -85,12 +86,15 @@ class PiSugarButtonListener:
             logger.info("pisugar package not installed - button listener disabled")
             return
 
+        boot_tries = max(1, _env_int("RAGNAR_PISUGAR_BOOT_CONNECT_TRIES", 3))
         max_attempts = max(3, _env_int("RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS", 24))
         wave_pause = max(5.0, _env_float("RAGNAR_PISUGAR_RECONNECT_INTERVAL_SEC", 45.0))
+        first_wave = True
 
         while not self._stop_event.is_set():
             connected = False
-            for attempt in range(max_attempts):
+            n_try = boot_tries if first_wave else max_attempts
+            for attempt in range(n_try):
                 if self._stop_event.is_set():
                     return
                 try:
@@ -104,17 +108,27 @@ class PiSugarButtonListener:
                 except Exception as e:
                     wait = min(12.0, 0.5 + attempt * 0.65)
                     logger.debug(
-                        f"PiSugar not available (attempt {attempt + 1}/{max_attempts}): {e} — retry in {wait:.1f}s",
+                        f"PiSugar not available (attempt {attempt + 1}/{n_try}): {e} — retry in {wait:.1f}s",
                     )
                     self._stop_event.wait(wait)
 
             if not connected:
+                if first_wave:
+                    logger.warning(
+                        "PiSugar: no TCP after %d boot attempt(s) — bypassing PiSugar for this session "
+                        "(Ragnar runs without battery/button). Fix I2C/stack or pisugar-server; "
+                        "or use HAT menu: Disconnect PiSugar. Restart ragnar to try again.",
+                        boot_tries,
+                    )
+                    return
                 logger.info(
-                    f"PiSugar: no TCP connection after {max_attempts} attempts — "
-                    f"pisugar-server may still be starting; next wave in {wave_pause:.0f}s",
+                    f"PiSugar: no TCP connection after {n_try} attempts — "
+                    f"next wave in {wave_pause:.0f}s",
                 )
                 self._stop_event.wait(wave_pause)
                 continue
+
+            first_wave = False  # successful TCP; later reconnect waves use max_attempts
 
             try:
                 self._server.register_single_tap_handler(self._on_single_tap)

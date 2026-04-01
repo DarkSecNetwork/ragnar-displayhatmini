@@ -56,12 +56,20 @@ class Ragnar:
         # PiSugar button listener (only if enabled — pip may install pisugar even without hardware)
         self.pisugar_listener = None
         _ps = os.environ.get("RAGNAR_DISABLE_PISUGAR", "").strip().lower()
-        if _ps not in ("1", "true", "yes"):
+        _cfg_disconnect = bool(
+            (getattr(shared_data, "config", None) or {}).get("pisugar_disconnect_next_boot")
+        )
+        if _ps not in ("1", "true", "yes") and not _cfg_disconnect:
             try:
                 from pisugar_button import PiSugarButtonListener
                 self.pisugar_listener = PiSugarButtonListener(shared_data)
             except ImportError:
                 pass
+        elif _cfg_disconnect:
+            logger.info(
+                "PiSugar listener skipped (config pisugar_disconnect_next_boot=True — "
+                "turn OFF in HAT menu: PiSugar, then restart ragnar to re-enable)",
+            )
 
     def run(self):
         """Main loop for Ragnar. Waits for Wi-Fi connection and starts Orchestrator."""

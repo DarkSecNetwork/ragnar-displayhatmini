@@ -24,6 +24,7 @@ You may see **`pisugar-server`** failing (I2C / no battery) **or** Ragnar trying
 | Ragnar / `connect_tcp` / **connection refused** | Ragnar started **before** `pisugar-server` listens | Ensure `ragnar.service` has `After=pisugar-server.service` + `Wants=pisugar-server.service` (installer does this when you choose PiSugar); or add `ragnar.service.d` snippet in PISUGAR3_BOOT.md |
 | `journalctl -u pisugar-server` shows errors | Service enabled but no PiSugar, bad I2C, or loose stack | If you do not use PiSugar: `sudo systemctl disable --now pisugar-server` |
 | Ragnar log lines about PiSugar when you have **no** hardware | `pisugar` pip is installed but you declined PiSugar in the installer | New installs set `RAGNAR_DISABLE_PISUGAR=1` when you answer **N** to PiSugar. On an existing Pi: `sudo systemctl edit ragnar` → add `Environment=RAGNAR_DISABLE_PISUGAR=1` under `[Service]`, then `daemon-reload` + `restart ragnar`. |
+| PiSugar TCP fails every boot but you want Ragnar up | First boot wave only **3** TCP attempts (`RAGNAR_PISUGAR_BOOT_CONNECT_TRIES`), then listener stops for that session | Fix hardware/I2C/`pisugar-server`, or **Display HAT Mini menu → PiSugar → Disconnect PiSugar ON**, then `sudo systemctl restart ragnar` (see [MENU_BUTTONS.md](../Ragnar/MENU_BUTTONS.md)). |
 | You **use** PiSugar but Ragnar ignores it | `RAGNAR_DISABLE_PISUGAR=1` is set | Remove that line via `systemctl edit ragnar` (or set to `0`) and ensure `pisugar-server` is healthy. |
 
 **Diagnostics:** `sudo /home/ragnar/Ragnar/scripts/check_pisugar.sh`

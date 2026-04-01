@@ -97,6 +97,14 @@ MENU_STRUCTURE = [
         {"label": "Reset Config", "type": "action", "key": "action_reset_config"},
         {"label": "Factory Reset", "type": "action", "key": "action_factory_reset"},
     ]),
+    ("--- PISUGAR ---", [
+        {
+            "label": "Disconnect PiSugar",
+            "type": "toggle",
+            "key": "pisugar_disconnect_next_boot",
+            "options": [("OFF", False), ("ON", True)],
+        },
+    ]),
     ("--- POWER ---", [
         {"label": "Restart", "type": "action", "key": "action_restart"},
         {"label": "Shutdown", "type": "action", "key": "action_shutdown"},

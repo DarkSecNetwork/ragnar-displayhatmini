@@ -1292,12 +1292,17 @@ class Display:
                 timeout = 30.0
                 start = time.time()
                 bg, fg = (0, 0, 0), (255, 255, 255)
+                try:
+                    from display_text_util import compact_journal_line, ellipsis_fit_to_width as _ellipsis_fit_dhm
+                except ImportError:
+                    compact_journal_line = lambda s: (s or "").strip()
+                    _ellipsis_fit_dhm = None  # type: ignore[misc, assignment]
                 while (time.time() - start) < timeout:
                     try:
                         out = subprocess.check_output(
                             ['journalctl', '-u', 'ragnar', '-n', '6', '--no-pager', '-o', 'short-iso'],
                             timeout=2, text=True)
-                        log_lines = [l.strip()[:50] for l in out.strip().splitlines() if l.strip()][-6:]
+                        log_lines = [l.strip() for l in out.strip().splitlines() if l.strip()][-6:]
                     except Exception:
                         log_lines = []
                     img = Image.new('RGB', (w, h), bg)
@@ -1310,9 +1315,15 @@ class Display:
                         font_sm = font
                     draw.text((max(0, w//2 - 60), 8), "Loading Ragnar...", font=font, fill=fg)
                     y = 36
-                    for line in log_lines:
+                    max_tw = max(40, w - 8)
+                    for raw in log_lines:
                         if y + 12 > h:
                             break
+                        msg = compact_journal_line(raw)
+                        if _ellipsis_fit_dhm is not None:
+                            line = _ellipsis_fit_dhm(draw, msg, font_sm, max_tw)
+                        else:
+                            line = msg[: max(20, w // 6)]
                         draw.text((4, y), line, font=font_sm, fill=fg)
                         y += 12
                     self.epd_helper.display_partial(img)

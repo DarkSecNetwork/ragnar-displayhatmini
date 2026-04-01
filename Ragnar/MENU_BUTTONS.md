@@ -22,6 +22,14 @@ This document describes how the on-device settings menu works for **Pimoroni Dis
 
 Pins match the Pimoroni Display HAT Mini. If you use a clone with different wiring, edit `PIN_*` in `displayhatmini_buttons.py`.
 
+## PiSugar menu (`--- PISUGAR ---`)
+
+| Item | Meaning |
+|------|--------|
+| **Disconnect PiSugar** | **OFF** (default): Ragnar starts the PiSugar TCP listener (if the installer did not set `RAGNAR_DISABLE_PISUGAR`). **ON**: Ragnar **skips** PiSugar entirely until you turn **OFF** and **`sudo systemctl restart ragnar`**. Stored in `shared_config.json` as `pisugar_disconnect_next_boot`. |
+
+On boot, if PiSugar is enabled but TCP fails, Ragnar tries only **`RAGNAR_PISUGAR_BOOT_CONNECT_TRIES`** times (default **3**), then **stops** retrying for that session so the rest of the app runs without a hung background loop.
+
 ## Environment variables (optional)
 
 | Variable | Effect |

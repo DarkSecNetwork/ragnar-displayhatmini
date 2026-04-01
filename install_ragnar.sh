@@ -1784,6 +1784,12 @@ fi
 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing ragnar-display.service (boot log on HAT Mini, before ragnar)..."
+  if [[ "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
+    BOOT_PISUGAR_ENV="Environment=RAGNAR_BOOT_PISUGAR_SCREEN_SEC=16"
+  else
+    BOOT_PISUGAR_ENV="Environment=RAGNAR_BOOT_PISUGAR_SCREEN_SEC=0"
+  fi
+  BOOT_BTN_ENV="Environment=RAGNAR_BOOT_BUTTON_HELP_SEC=10"
   cat > /etc/systemd/system/ragnar-display.service <<DSVC
 [Unit]
 Description=Ragnar boot journal on Display HAT Mini
@@ -1797,16 +1803,18 @@ Type=oneshot
 ExecStart=/usr/bin/python3 -OO $RAGNAR_DIR/scripts/ragnar_boot_display.py
 Environment=RAGNAR_BOOT_DISPLAY_SEC=45
 Environment=RAGNAR_NETWORK_SCREEN_SEC=10
+$BOOT_PISUGAR_ENV
+$BOOT_BTN_ENV
 Environment=RAGNAR_DIR=$RAGNAR_DIR
 Environment=PYTHONUNBUFFERED=1
-TimeoutStartSec=120
+TimeoutStartSec=180
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 DSVC
-  chmod +x "$RAGNAR_DIR/scripts/ragnar_boot_display.py" 2>/dev/null || true
+  chmod +x "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" 2>/dev/null || true
 fi
 
 # PiSugar: requirements.txt installs the pip package for everyone, but only users who opted in need the listener.
@@ -1823,7 +1831,8 @@ if [[ "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
   PISUGAR_AFTER_SUFFIX=" pisugar-server.service"
   PISUGAR_WANTS_SUFFIX=" pisugar-server.service"
   # Listener retries + background reconnect if server is slow after boot
-  PISUGAR_CONNECT_ENV="Environment=RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS=24
+  PISUGAR_CONNECT_ENV="Environment=RAGNAR_PISUGAR_BOOT_CONNECT_TRIES=3
+Environment=RAGNAR_PISUGAR_MAX_CONNECT_ATTEMPTS=24
 Environment=RAGNAR_PISUGAR_RECONNECT_INTERVAL_SEC=45"
 else
   PISUGAR_CONNECT_ENV=""
@@ -1928,7 +1937,7 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-onlin
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service
