@@ -125,6 +125,23 @@ class EPDHelper:
             logger.error(f"Error putting EPD to sleep: {e}")
             raise
 
+    def release(self):
+        """Release SPI/GPIO (waveshare module_exit or sleep). Safe to call multiple times."""
+        try:
+            if hasattr(self.epd, "module_exit"):
+                self.epd.module_exit()
+            else:
+                self.epd.sleep()
+        except Exception as e:
+            logger.debug(f"EPD release: {e}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
     @staticmethod
     def auto_detect(known_types=None):
         """Try each known EPD driver and return the first that initializes successfully.

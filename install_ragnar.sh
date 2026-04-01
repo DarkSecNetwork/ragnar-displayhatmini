@@ -1823,12 +1823,9 @@ PISUGAR_ENV_LINE=""
 if [[ ! "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
   PISUGAR_ENV_LINE="Environment=RAGNAR_DISABLE_PISUGAR=1"
 fi
-# PiSugar 3: start Ragnar after pisugar-server so TCP client is not met with connection refused during boot.
-# Wants= (not Requires=) so Ragnar still starts if pisugar-server fails.
-PISUGAR_AFTER_SUFFIX=""
+# PiSugar: Wants= only — NEVER After= pisugar-server (I2C can fail; Ragnar must not wait on it).
 PISUGAR_WANTS_SUFFIX=""
 if [[ "${INSTALL_PISUGAR:-n}" =~ ^[Yy]$ ]]; then
-  PISUGAR_AFTER_SUFFIX=" pisugar-server.service"
   PISUGAR_WANTS_SUFFIX=" pisugar-server.service"
   # Listener retries + background reconnect if server is slow after boot
   PISUGAR_CONNECT_ENV="Environment=RAGNAR_PISUGAR_BOOT_CONNECT_TRIES=3
@@ -1842,10 +1839,10 @@ echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
 Description=ragnar Service
-# After=network.target (not network-online): waiting for DHCP/Wi-Fi "online" can block ragnar for minutes
-# if Wi-Fi fails — leaving you with no UI and a "stuck" boot. WiFiManager retries inside Ragnar.
-After=network.target ssh.service$DISPLAY_AFTER_BOOT$PISUGAR_AFTER_SUFFIX
-Wants=network-online.target$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
+# After=basic.target + network.target (not network-online): no routable-IP wait.
+# PiSugar is never in After= — soft Wants= only.
+After=basic.target network.target ssh.service$DISPLAY_AFTER_BOOT
+Wants=network.target network-online.target$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -1857,7 +1854,7 @@ $BOOT_SPLASH_LINE
 ExecStart=/usr/bin/python3 -OO $RAGNAR_DIR/$RAGNAR_ENTRYPOINT
 WorkingDirectory=$RAGNAR_DIR
 Restart=always
-RestartSec=10
+RestartSec=2
 User=root
 # Ensure SSH remains accessible
 ExecStartPre=/bin/bash -c '/bin/systemctl start ssh || /bin/systemctl start sshd || true'

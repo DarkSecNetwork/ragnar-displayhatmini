@@ -105,6 +105,13 @@ MENU_STRUCTURE = [
             "options": [("OFF", False), ("ON", True)],
         },
     ]),
+    ("--- HEALTH ---", [
+        {
+            "label": "PiSugar & System Health",
+            "type": "action",
+            "key": "action_open_health_panel",
+        },
+    ]),
     ("--- POWER ---", [
         {"label": "Restart", "type": "action", "key": "action_restart"},
         {"label": "Shutdown", "type": "action", "key": "action_shutdown"},
@@ -330,6 +337,14 @@ def apply_select(shared_data, item):
             return True
         if key == "action_check_updates":
             threading.Thread(target=lambda: _run("apt update 2>/dev/null"), daemon=True).start()
+            return True
+        if key == "action_open_health_panel":
+            try:
+                shared_data.health_panel_open = True
+                shared_data.health_scroll = 0
+                shared_data.health_diag_lines = []
+            except Exception as e:
+                logger.warning("open health panel: %s", e)
             return True
         if key in ("action_gpio_test", "action_button_mapping", "action_simulate_input", "action_reset_config", "action_factory_reset", "action_ssh_port", "action_safe_mode"):
             # Stub

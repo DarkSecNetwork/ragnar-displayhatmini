@@ -898,6 +898,11 @@ class SharedData:
         self.orchestrator_should_exit = False
         self.webapp_should_exit = False 
         self.ragnar_instance = None
+        # Display HAT Mini: system health panel + diagnostics (non-persistent)
+        self.health_panel_open = False
+        self.health_scroll = 0
+        self.health_diag_lines = []  # type: ignore[var-annotated]
+        self.health_test_running = False
         self.gateway_info = {}  # Populated by NetworkScanner.get_gateway_info()
         self.wifichanged = False
         self.bluetooth_active = False

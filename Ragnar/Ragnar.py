@@ -254,6 +254,14 @@ if __name__ == "__main__":
     # Load environment variables from .env file at the very beginning
     load_env()
 
+    try:
+        from ragnar_safe import log_boot_marker, setup_ragnar_file_logging
+
+        setup_ragnar_file_logging("/var/log/ragnar.log")
+        log_boot_marker("Ragnar.py __main__ (after load_env)")
+    except Exception:
+        pass
+
     logger.info("Starting threads")
 
     try:

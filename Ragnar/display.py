@@ -22,6 +22,15 @@ import random
 import sys
 import csv
 from PIL import Image, ImageDraw
+
+# Use module-level constants in hot paths so `run()` never breaks if `Image` is shadowed
+# (e.g. accidental `for Image, ... in stats` makes PIL's Image unbound in that function).
+if hasattr(Image, "Transpose"):
+    _PIL_ROTATE_180 = Image.Transpose.ROTATE_180
+else:
+    _PIL_ROTATE_180 = getattr(Image, "ROTATE_180", 2)
+_PIL_NEAREST = getattr(Image, "NEAREST", 0)
+
 from init_shared import shared_data  
 from comment import Commentaireia
 from logger import Logger
@@ -57,6 +66,11 @@ except ImportError:
     EVENT_MENU_TOGGLE = EVENT_UP = EVENT_DOWN = EVENT_SELECT = EVENT_BACK = None
     build_flat_entries = get_selectable_count = cursor_to_line_index = apply_select = None
 
+try:
+    import system_health
+except ImportError:
+    system_health = None  # type: ignore[misc, assignment]
+
 class Display:
     def __init__(self, shared_data):
         """Initialize the display and start the main image and shared data update threads."""
@@ -77,17 +91,25 @@ class Display:
             }
         }
 
+        self._headless_display = False
         try:
+            if self.shared_data.epd_helper is None:
+                raise RuntimeError("epd_helper is None")
             self.epd_helper = self.shared_data.epd_helper
             self.epd_helper.init_partial_update()
             logger.info("Display initialization complete.")
         except Exception as e:
-            logger.error(f"Error during display initialization: {e}")
-            raise
+            logger.error(f"Display unavailable (headless fallback): {e}")
+            self._headless_display = True
+            self.epd_helper = None
+            self.shared_data.headless_mode = True
 
-        self.main_image_thread = threading.Thread(target=self.update_main_image)
-        self.main_image_thread.daemon = True
-        self.main_image_thread.start()
+        if not self._headless_display:
+            self.main_image_thread = threading.Thread(target=self.update_main_image)
+            self.main_image_thread.daemon = True
+            self.main_image_thread.start()
+        else:
+            self.main_image_thread = None
 
         self.update_shared_data_thread = threading.Thread(target=self.schedule_update_shared_data)
         self.update_shared_data_thread.daemon = True
@@ -707,7 +729,11 @@ class Display:
             result = subprocess.Popen(['ip', 'neigh', 'show', 'dev', interface], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             output, error = result.communicate()
             if result.returncode != 0:
-                logger.error(f"Error executing 'ip neigh show dev {interface}': {error}")
+                err = (error or "").strip()
+                if "Cannot find device" in err:
+                    logger.debug(f"Interface {interface} not present, skipping neigh check")
+                else:
+                    logger.error(f"Error executing 'ip neigh show dev {interface}': {error}")
                 return False
             return bool(output.strip())
         except Exception as e:
@@ -715,16 +741,19 @@ class Display:
             return False
 
     def is_usb_connected(self):
-        """Check if any device is connected to the USB interface."""
+        """Check if any device is connected to the USB gadget interface (usb0), if present."""
         try:
-            result = subprocess.Popen(['ip', 'neigh', 'show', 'dev', 'usb0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            output, error = result.communicate()
-            if result.returncode != 0:
-                logger.error(f"Error executing 'ip neigh show dev usb0': {error}")
+            chk = subprocess.run(
+                ["ip", "link", "show", "dev", "usb0"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if chk.returncode != 0:
                 return False
-            return bool(output.strip())
+            return self.is_interface_connected("usb0")
         except Exception as e:
-            logger.error(f"Error checking USB connection status: {e}")
+            logger.debug(f"USB gadget interface not available: {e}")
             return False
 
     def _render_settings_menu(self, image, draw):
@@ -764,6 +793,45 @@ class Display:
                     draw.text((2, y), text[:42], font=font, fill=0)
             y += line_height
 
+    def _render_health_panel(self, image, draw):
+        """PiSugar & system health overlay (scrollable)."""
+        W, H = self.shared_data.width, self.shared_data.height
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        try:
+            font = ImageDraw.ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 9
+            )
+            font_b = ImageDraw.ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 10
+            )
+        except Exception:
+            font = ImageDraw.ImageFont.load_default()
+            font_b = font
+        lines = []
+        if system_health:
+            try:
+                lines.extend(system_health.get_live_status_lines(self.shared_data))
+            except Exception as ex:
+                lines.append("health: " + str(ex)[:48])
+        else:
+            lines.append("system_health module missing")
+        extra = getattr(self.shared_data, "health_diag_lines", None) or []
+        if extra:
+            lines.append("--- last test ---")
+            lines.extend([str(x)[:44] for x in extra[-16:]])
+        scr = int(getattr(self.shared_data, "health_scroll", 0))
+        line_h = 11
+        max_lines = max(1, (H - 8) // line_h)
+        total = max(0, len(lines) - max_lines)
+        scr = max(0, min(scr, total))
+        self.shared_data.health_scroll = scr
+        y = 2
+        for row in lines[scr : scr + max_lines]:
+            draw.text((2, y), str(row)[:44], font=font, fill=0)
+            y += line_h
+        if getattr(self.shared_data, "health_test_running", False):
+            draw.text((2, H - 13), "Running tests...", font=font_b, fill=0)
+
     def _sleep_interruptible(self, current_page):
         """Sleep for screen_delay but wake early if button changes the page.
         Display HAT Mini: button_listener is None — drain DHM queue in short slices so menu is responsive."""
@@ -801,6 +869,27 @@ class Display:
                 break
             if _log_ev:
                 logger.info(f"Display HAT Mini button: {ev}")
+            if getattr(self.shared_data, "health_panel_open", False):
+                if ev in (EVENT_MENU_TOGGLE, EVENT_BACK):
+                    self.shared_data.health_panel_open = False
+                    self.shared_data.health_diag_lines = []
+                elif ev == EVENT_UP:
+                    self.shared_data.health_scroll = max(
+                        0, int(getattr(self.shared_data, "health_scroll", 0)) - 1
+                    )
+                elif ev == EVENT_DOWN:
+                    self.shared_data.health_scroll = int(
+                        getattr(self.shared_data, "health_scroll", 0)
+                    ) + 1
+                elif ev == EVENT_SELECT and system_health:
+                    system_health.start_diagnostic_thread(
+                        self.shared_data,
+                        lambda lines, sd=self.shared_data: setattr(
+                            sd, "health_diag_lines", list(lines)
+                        ),
+                    )
+                continue
+
             if ev == EVENT_MENU_TOGGLE:
                 if build_flat_entries is not None:
                     was_visible = self.menu_visible
@@ -1283,6 +1372,11 @@ class Display:
 
     def run(self):
         """Main loop for updating the EPD display with shared data."""
+        if getattr(self, "_headless_display", False):
+            logger.warning("Headless mode: SPI/display unavailable — idle loop")
+            while not self.shared_data.display_should_exit:
+                time.sleep(1.0)
+            return
         # Show Loading Ragnar + last ragnar log lines until deferred init (Display HAT Mini)
         # Black background, white text; w,h from config so landscape/portrait is correct
         try:
@@ -1355,14 +1449,17 @@ class Display:
                 if self.dhm_listener and self.dhm_listener.available:
                     self._drain_dhm_menu_events()
 
-                    if self.menu_visible:
+                    if getattr(self.shared_data, "health_panel_open", False):
+                        self._render_health_panel(image, draw)
+                    elif self.menu_visible:
                         self._render_settings_menu(image, draw)
+                    if self.menu_visible or getattr(self.shared_data, "health_panel_open", False):
                         if self.screen_reversed:
-                            image = image.transpose(Image.Transpose.ROTATE_180)
+                            image = image.transpose(_PIL_ROTATE_180)
                         self.epd_helper.display_partial(image)
                         self.epd_helper.display_partial(image)
                         if self.web_screen_reversed:
-                            image = image.transpose(Image.Transpose.ROTATE_180)
+                            image = image.transpose(_PIL_ROTATE_180)
                         with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
                             image.save(img_file)
                             img_file.flush()
@@ -1398,11 +1495,11 @@ class Display:
                 if current_page != PAGE_MAIN:
                     # Non-main pages are fully rendered above, skip to display
                     if self.screen_reversed:
-                        image = image.transpose(Image.Transpose.ROTATE_180)
+                        image = image.transpose(_PIL_ROTATE_180)
                     self.epd_helper.display_partial(image)
                     self.epd_helper.display_partial(image)
                     if self.web_screen_reversed:
-                        image = image.transpose(Image.Transpose.ROTATE_180)
+                        image = image.transpose(_PIL_ROTATE_180)
                     with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
                         image.save(img_file)
                         img_file.flush()
@@ -1476,8 +1573,8 @@ class Display:
                     (self.shared_data.attacks,   (int(100 * sx), int(218 * sy)), (int(102 * sx), int(237 * sy)), str(self.shared_data.attacksnbr)),
                 ]
 
-                for img, img_pos, text_pos, text in stats:
-                    image.paste(img, img_pos)
+                for stat_icon, img_pos, text_pos, text in stats:
+                    image.paste(stat_icon, img_pos)
                     draw.text(text_pos, text, font=self.shared_data.font_arial9, fill=0)
 
                 self.shared_data.update_ragnarstatus()
@@ -1489,7 +1586,7 @@ class Display:
                 if self.shared_data.frise is not None:
                     frise_img = self.shared_data.frise
                     if frise_img.width != W - 2:
-                        frise_img = frise_img.resize((W - 2, frise_img.height), Image.NEAREST)
+                        frise_img = frise_img.resize((W - 2, frise_img.height), _PIL_NEAREST)
                     image.paste(frise_img, (1, int(160 * sy)))
 
                 # Frame & dividers — span full physical width
@@ -1514,13 +1611,13 @@ class Display:
                     y_text += (self.shared_data.font_arialbold.getbbox(line)[3] - self.shared_data.font_arialbold.getbbox(line)[1]) + 3
 
                 if self.screen_reversed:
-                    image = image.transpose(Image.Transpose.ROTATE_180)
+                    image = image.transpose(_PIL_ROTATE_180)
 
                 self.epd_helper.display_partial(image)
                 self.epd_helper.display_partial(image)
 
                 if self.web_screen_reversed:
-                    image = image.transpose(Image.Transpose.ROTATE_180)
+                    image = image.transpose(_PIL_ROTATE_180)
                 with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
                     image.save(img_file)
                     img_file.flush()

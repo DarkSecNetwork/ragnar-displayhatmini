@@ -83,7 +83,7 @@ if command -v i2cdetect &>/dev/null; then
   if [[ "${n1:-0}" -eq 0 ]]; then
     bad "bus 1 empty — PiSugar cannot work (nothing at 0x57 etc.). Reseat stack, check 5V, or disable pisugar-server if no hardware: systemctl disable --now pisugar-server"
   fi
-else
+else9
   warn "i2cdetect not installed — apt install i2c-tools"
 fi
 
