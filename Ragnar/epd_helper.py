@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 # Known EPD types to try during auto-detection (most common first)
 KNOWN_EPD_TYPES = [
+    "displayhatmini",
     "epd2in13_V4",
     "epd2in13_V3",
     "epd2in13_V2",
@@ -26,6 +27,18 @@ class EPDHelper:
         self._partial_init_done = False
 
     def _load_epd_module(self):
+        # Display HAT Mini (ST7789) ships in pip package waveshare_epd, not resources/
+        if self.epd_type == "displayhatmini":
+            try:
+                from waveshare_epd import displayhatmini
+
+                return displayhatmini.EPD()
+            except ImportError as e:
+                logger.error(f"displayhatmini not found (pip install waveshare-epd): {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error loading Display HAT Mini driver: {e}")
+                raise
         try:
             epd_module_name = f'resources.waveshare_epd.{self.epd_type}'
             epd_module = importlib.import_module(epd_module_name)

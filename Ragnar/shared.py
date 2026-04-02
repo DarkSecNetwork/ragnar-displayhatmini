@@ -85,6 +85,8 @@ def resolve_epd_type(size_key, current_epd_type=None):
     return default_driver
 
 DISPLAY_PROFILES = {
+    # Pimoroni Display HAT Mini (ST7789); installer may set 320x240 landscape — override via config/ref_*
+    "displayhatmini": {"ref_width": 240, "ref_height": 320, "default_flip": False},
     "epd2in13":    {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in7":     {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in7_V2":  {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
@@ -764,6 +766,45 @@ class SharedData:
                 logger.error(f"Failed to create directory {directory}: {e}")
     
 
+    def _align_epd_type_with_displayhatmini_boot_service(self):
+        """If ragnar-display (LCD boot splash) is enabled, main Ragnar must use displayhatmini.
+
+        Otherwise config often stays epd2in13_V4 → wrong SPI driver → blank LCD after splash.
+        Set RAGNAR_SKIP_DISPLAYHATMINI_AUTO=1 to disable.
+        """
+        if self._pager_mode:
+            return
+        raw = os.environ.get("RAGNAR_SKIP_DISPLAYHATMINI_AUTO", "").strip().lower()
+        if raw in ("1", "true", "yes"):
+            return
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-enabled", "ragnar-display.service"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            out = (r.stdout or "").strip().lower()
+            if "enabled" not in out:
+                return
+        except Exception:
+            return
+        cur = (self.config.get("epd_type") or "").strip()
+        if cur == "displayhatmini":
+            return
+        # Boot splash is always Display HAT Mini when this unit exists and is enabled
+        if cur.startswith("epd") or cur in ("auto", "", DEFAULT_EPD_TYPE):
+            logger.warning(
+                "ragnar-display.service is enabled but epd_type was %r — using "
+                "'displayhatmini' for main UI (must match LCD boot splash).",
+                cur or DEFAULT_EPD_TYPE,
+            )
+            self.config["epd_type"] = "displayhatmini"
+            try:
+                self.save_config()
+            except Exception as e:
+                logger.warning("Could not save config after epd_type alignment: %s", e)
+
     # def initialize_epd_display(self):
     #     """Initialize the e-paper display."""
     #     try:
@@ -804,6 +845,7 @@ class SharedData:
             return
         try:
             logger.info("Initializing EPD display...")
+            self._align_epd_type_with_displayhatmini_boot_service()
             epd_type = self.config.get("epd_type", DEFAULT_EPD_TYPE)
 
             # Auto-detect if set to "auto" OR if still on factory default (user never ran installer with detection)
@@ -836,16 +878,21 @@ class SharedData:
             self.epd_helper.init_full_update()
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
 
-            # Validate the driver works by doing a test getbuffer with a blank image
-            try:
-                test_img = Image.new('1', (self.width, self.height), 255)
-                test_buf = self.epd_helper.epd.getbuffer(test_img)
-                expected_size = int(self.width / 8) * self.height
-                if len(test_buf) < expected_size:
-                    raise ValueError(f"Buffer size mismatch: got {len(test_buf)}, expected {expected_size}")
-            except Exception as ve:
-                logger.warning(f"EPD driver '{epd_type}' buffer validation failed: {ve}, trying auto-detect...")
-                raise  # Fall through to the auto-detect fallback below
+            # Validate e-paper drivers only (LCD getbuffer may return PIL Image, not raw bytes)
+            if epd_type != "displayhatmini":
+                try:
+                    test_img = Image.new('1', (self.width, self.height), 255)
+                    test_buf = self.epd_helper.epd.getbuffer(test_img)
+                    expected_size = int(self.width / 8) * self.height
+                    if len(test_buf) < expected_size:
+                        raise ValueError(
+                            f"Buffer size mismatch: got {len(test_buf)}, expected {expected_size}"
+                        )
+                except Exception as ve:
+                    logger.warning(
+                        f"EPD driver '{epd_type}' buffer validation failed: {ve}, trying auto-detect..."
+                    )
+                    raise  # Fall through to the auto-detect fallback below
 
             logger.info(f"EPD {self.config['epd_type']} initialized with size: {self.width}x{self.height}")
         except Exception as e:
