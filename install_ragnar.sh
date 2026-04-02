@@ -1843,8 +1843,8 @@ Description=ragnar Service
 # PiSugar is never in After= — soft Wants= only.
 After=basic.target network.target ssh.service$DISPLAY_AFTER_BOOT
 Wants=network.target network-online.target$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
-StartLimitIntervalSec=300
-StartLimitBurst=5
+# 0 = disable start rate limiting (allows restart storms during bring-up; pair with RestartSec)
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
