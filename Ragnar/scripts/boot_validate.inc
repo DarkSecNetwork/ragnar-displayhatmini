@@ -89,6 +89,42 @@ ragnar_validate_config_txt() {
   return 0
 }
 
+# Append one kernel parameter to cmdline.txt if not already set (single-line cmdline only).
+# Safe to call after ragnar_boot_backup; validates with ragnar_validate_cmdline_file when available.
+ragnar_cmdline_append_if_missing() {
+  local param="$1"
+  local cl fw
+  fw="$(ragnar_boot_firmware_dir)"
+  cl="$fw/cmdline.txt"
+  [[ -f "$cl" ]] || cl="/boot/cmdline.txt"
+  [[ -f "$cl" ]] || return 0
+
+  local content
+  content=$(tr -d '\r' <"$cl" | head -1)
+  if [[ " $content " == *" $param "* ]]; then
+    return 0
+  fi
+  # If param is key=value, skip when that key is already present (avoid duplicate keys).
+  if [[ "$param" == *"="* ]]; then
+    local key="${param%%=*}"
+    if grep -qE "(^|[[:space:]])${key}=" <<<"$content"; then
+      return 0
+    fi
+  fi
+
+  printf '%s %s\n' "$content" "$param" > "${cl}.ragnar.new" && mv "${cl}.ragnar.new" "$cl"
+
+  if command -v ragnar_validate_cmdline_file >/dev/null 2>&1; then
+    if ! ragnar_validate_cmdline_file "$cl"; then
+      echo "ERROR: cmdline invalid after append: $param — restoring backup if present." >&2
+      [[ -f "${cl}.ragnar.bak" ]] && cp -a "${cl}.ragnar.bak" "$cl"
+      return 1
+    fi
+  fi
+  echo "  cmdline: appended $param"
+  return 0
+}
+
 # Run after all installer changes to /boot/firmware/* (and optional /boot/config.txt).
 ragnar_validate_boot_after_install() {
   local fw err=0

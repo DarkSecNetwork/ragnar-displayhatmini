@@ -27,7 +27,7 @@ DISPLAYHATMINI_REF_H=240
 DISPLAYHATMINI_ROTATION=180
 
 echo "========================================"
-echo " Ragnar Installer v6.3"
+echo " Ragnar Installer v1"
 echo "========================================"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -125,6 +125,36 @@ ragnar_validate_config_txt() {
     echo "validate: $f has no active settings (only comments?) — suspicious." >&2
     return 1
   fi
+  return 0
+}
+
+ragnar_cmdline_append_if_missing() {
+  local param="$1"
+  local cl fw
+  fw="$(ragnar_boot_firmware_dir)"
+  cl="$fw/cmdline.txt"
+  [[ -f "$cl" ]] || cl="/boot/cmdline.txt"
+  [[ -f "$cl" ]] || return 0
+  local content
+  content=$(tr -d '\r' <"$cl" | head -1)
+  if [[ " $content " == *" $param "* ]]; then
+    return 0
+  fi
+  if [[ "$param" == *"="* ]]; then
+    local key="${param%%=*}"
+    if grep -qE "(^|[[:space:]])${key}=" <<<"$content"; then
+      return 0
+    fi
+  fi
+  printf '%s %s\n' "$content" "$param" > "${cl}.ragnar.new" && mv "${cl}.ragnar.new" "$cl"
+  if command -v ragnar_validate_cmdline_file >/dev/null 2>&1; then
+    if ! ragnar_validate_cmdline_file "$cl"; then
+      echo "ERROR: cmdline invalid after append: $param — restoring backup if present." >&2
+      [[ -f "${cl}.ragnar.bak" ]] && cp -a "${cl}.ragnar.bak" "$cl"
+      return 1
+    fi
+  fi
+  echo "  cmdline: appended $param"
   return 0
 }
 
@@ -1018,7 +1048,11 @@ apt upgrade -y || {
 }
 
 echo "Installing base packages..."
-apt install -y git wget curl lsof sudo build-essential python3 python3-pip python3-dev python3-pil python3-numpy python3-pandas python3-spidev libjpeg-dev zlib1g-dev libpng-dev libffi-dev libssl-dev libgpiod-dev libcap-dev libi2c-dev libopenjp2-7 libopenblas-dev libblas-dev liblapack-dev nmap bluez bluez-tools bridge-utils network-manager i2c-tools rfkill || true
+# hostapd+dnsmasq: Ragnar WiFiManager AP mode; iw: diagnostics; gpiod/raspi-gpio: GPIO debug (Bookworm often lacks raspi-gpio by default)
+apt install -y git wget curl lsof sudo build-essential python3 python3-pip python3-dev python3-pil python3-numpy python3-pandas python3-spidev libjpeg-dev zlib1g-dev libpng-dev libffi-dev libssl-dev libgpiod-dev libcap-dev libi2c-dev libopenjp2-7 libopenblas-dev libblas-dev liblapack-dev nmap bluez bluez-tools bridge-utils network-manager i2c-tools rfkill hostapd dnsmasq iw gpiod || true
+apt install -y raspi-gpio 2>/dev/null || true
+# Ragnar starts these via systemctl on demand; stock images sometimes mask them.
+systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
 echo "Installing Python packages..."
   pip3 install --break-system-packages --ignore-installed --no-cache-dir typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai "cryptography<45" || true
@@ -1084,6 +1118,10 @@ fi
 # Do NOT set act_led_trigger=none — it stops normal green ACT blinking and is often mistaken for a boot hang.
 # Legacy installs: remove that line if you want the default heartbeat/activity behaviour back.
 [ -f /boot/config.txt ] && append_if_missing "dtparam=spi=on" "/boot/config.txt" || true
+# Framebuffer console: avoid kernel blanking (often mistaken for "Pi crashed" when HDMI/console is used).
+if command -v ragnar_cmdline_append_if_missing >/dev/null 2>&1; then
+  ragnar_cmdline_append_if_missing "consoleblank=0" || true
+fi
 [[ "${RAGNAR_INSTALLER_PERF_TUNING:-0}" == "1" ]] && { [ -f /boot/config.txt ] && append_if_missing "gpu_mem=128" "/boot/config.txt" || true; }
 
 select_display
@@ -1854,8 +1892,11 @@ $BOOT_SPLASH_LINE
 ExecStart=/usr/bin/python3 -OO $RAGNAR_DIR/$RAGNAR_ENTRYPOINT
 WorkingDirectory=$RAGNAR_DIR
 Restart=always
-RestartSec=2
+RestartSec=4
 User=root
+# Slightly prefer not OOM-killing Ragnar under memory pressure; raise fd limit for many connections
+OOMScoreAdjust=-75
+LimitNOFILE=65536
 # Ensure SSH remains accessible
 ExecStartPre=/bin/bash -c '/bin/systemctl start ssh || /bin/systemctl start sshd || true'
 # Logging
