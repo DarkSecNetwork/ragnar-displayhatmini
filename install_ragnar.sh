@@ -1966,6 +1966,37 @@ if [ "$DISPLAY_MODE" = "displayhatmini" ] && [ -f /etc/systemd/system/ragnar-dis
 fi
 systemctl enable ragnar
 
+echo "Boot log on FAT partition (folder Boot_Log/, timestamped files; 3 kept; readable on Windows e.g. E:/Boot_Log/)..."
+chmod +x "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" 2>/dev/null || true
+if [[ -d /boot/firmware ]]; then
+  mkdir -p /boot/firmware/Boot_Log
+  chmod 755 /boot/firmware/Boot_Log
+elif [[ -d /boot ]]; then
+  mkdir -p /boot/Boot_Log
+  chmod 755 /boot/Boot_Log
+fi
+cat > /etc/systemd/system/ragnar-boot-log-to-firmware.service <<BOOTLOGSVC
+[Unit]
+Description=Ragnar: write boot log to FAT Boot_Log folder (timestamped files for Windows)
+After=multi-user.target systemd-journald.service
+Wants=systemd-journald.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+ExecStartPre=/bin/sleep 35
+ExecStart=$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh
+
+[Install]
+WantedBy=multi-user.target
+BOOTLOGSVC
+systemctl daemon-reload
+systemctl enable ragnar-boot-log-to-firmware.service 2>/dev/null || true
+echo "  Enabled: ragnar-boot-log-to-firmware.service (~35s after boot -> Boot_Log/ragnar-boot-<stamp>.log, latest-boot-errors.log)"
+"$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" 2>/dev/null || true
+
 # Help network-online.target actually wait for Wi-Fi/Ethernet on Bookworm (optional unit)
 if systemctl list-unit-files 2>/dev/null | grep -q '^NetworkManager-wait-online.service'; then
   systemctl enable NetworkManager-wait-online.service 2>/dev/null || true
@@ -1976,7 +2007,7 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-onlin
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service

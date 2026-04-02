@@ -61,6 +61,15 @@ except ImportError:
 
 def _classify(line: str) -> str:
     low = line.lower()
+    # Realtek USB Bluetooth (rtk_btusb / rtk_bt firmware): common probe/firmware "failed" lines
+    # when no dongle is in use or firmware blob is missing — not a Ragnar bug; avoid [ERR] panic.
+    if "rtk_bt" in low or "rtk_btusb" in low:
+        return "[WRN] "
+    if "failed to load rtk_bt" in low or "/rtk_bt/" in low:
+        return "[WRN] "
+    # No battery RTC: hctosys cannot sync from /dev/rtc* — normal on many Pi stacks.
+    if "hctosys" in low and "rtc" in low and ("unable" in low or "err" in low):
+        return "[WRN] "
     if any(x in low for x in ("error", "failed", "traceback", "exception", "fatal")):
         return "[ERR] "
     if "warn" in low:

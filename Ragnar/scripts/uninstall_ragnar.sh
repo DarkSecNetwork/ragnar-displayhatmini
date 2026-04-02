@@ -84,6 +84,11 @@ stop_services() {
         systemctl disable ragnar
     fi
 
+    if systemctl list-unit-files 2>/dev/null | grep -q '^ragnar-boot-log-to-firmware.service'; then
+        systemctl stop ragnar-boot-log-to-firmware 2>/dev/null || true
+        systemctl disable ragnar-boot-log-to-firmware 2>/dev/null || true
+    fi
+
     # Stop and disable usb-gadget service
     if systemctl is-active --quiet "usb-gadget"; then
         log "INFO" "Stopping usb-gadget service..."
@@ -104,6 +109,7 @@ stop_services() {
 remove_service_files() {
     log "INFO" "Removing service files..."
     rm -f /etc/systemd/system/ragnar.service
+    rm -f /etc/systemd/system/ragnar-boot-log-to-firmware.service
     rm -f /etc/systemd/system/usb-gadget.service
     rm -f /usr/local/bin/usb-gadget.sh
     rm -f /etc/NetworkManager/conf.d/99-ragnar-wifi.conf

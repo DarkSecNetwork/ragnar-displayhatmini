@@ -1,0 +1,19 @@
+# Installed to /etc/systemd/system/ by install_ragnar.sh (ExecStart path expanded).
+# Writes Boot_Log/ragnar-boot-<date>_<time>.log on the FAT partition; keeps 3 newest.
+
+[Unit]
+Description=Ragnar: write boot log to FAT Boot_Log folder (timestamped files for Windows)
+After=multi-user.target systemd-journald.service
+Wants=systemd-journald.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+# Let systemd/journal settle so the export includes most of this boot.
+ExecStartPre=/bin/sleep 35
+ExecStart=/home/ragnar/Ragnar/scripts/export_boot_log_to_firmware.sh
+
+[Install]
+WantedBy=multi-user.target
