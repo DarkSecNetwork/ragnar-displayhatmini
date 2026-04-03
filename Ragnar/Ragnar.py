@@ -76,7 +76,12 @@ class Ragnar:
         logger.info("=" * 70)
         logger.info("RAGNAR MAIN THREAD STARTING")
         logger.info("=" * 70)
-        
+        if os.path.isfile("/var/run/ragnar-network-degraded"):
+            logger.warning(
+                "Boot mitigations reported NETWORK DEGRADED (/var/run/ragnar-network-degraded). "
+                "If fallback AP is up, join SSID Ragnar-Setup — see /var/log/ragnar-mitigations.log.",
+            )
+
         # Start PiSugar button listener (if available)
         if self.pisugar_listener:
             self.pisugar_listener.start()

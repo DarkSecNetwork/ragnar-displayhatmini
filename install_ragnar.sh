@@ -1075,18 +1075,12 @@ else
   echo "  RTKit: if ServiceUnknown persists (xdg-desktop-portal/PipeWire), reboot once so RTKit registers before session."
 fi
 
-# Polkit: GIO may open /usr/local/share/polkit-1/rules.d — missing dir spams GLib "g-file-error-quark" errors.
-# ALSA: alsactl UCM "failed to import hw:0 use case" (-2) is often missing alsa-ucm-conf profiles.
-echo "Polkit /usr/local rules dir + ALSA UCM (quiet common polkit/alsactl noise)..."
+# Polkit: GIO may open /usr/local/share/polkit-1/rules.d — create if missing.
+# ALSA UCM profiles for alsactl use-case import.
+echo "Polkit /usr/local rules dir + ALSA UCM packages..."
 mkdir -p /usr/local/share/polkit-1/rules.d
 chmod 755 /usr/local/share/polkit-1 /usr/local/share/polkit-1/rules.d 2>/dev/null || true
 apt install -y alsa-ucm-conf alsa-utils 2>/dev/null || true
-
-# NFS block-layout daemon: err if rpc_pipefs not mounted (typical when NFS unused). Optional disable.
-if [[ "${RAGNAR_INSTALLER_DISABLE_NFS_HELPERS:-0}" == "1" ]]; then
-  echo "RAGNAR_INSTALLER_DISABLE_NFS_HELPERS=1: disabling blkmapd (no NFS block layout)..."
-  systemctl disable --now blkmapd.service 2>/dev/null || true
-fi
 
 echo "Installing Python packages..."
   pip3 install --break-system-packages --ignore-installed --no-cache-dir typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai "cryptography<45" || true
@@ -1204,6 +1198,88 @@ else
   rm -rf "$CLONE_DIR"
 fi
 cd "$RAGNAR_DIR"
+
+# ALSA udev GOTO=alsa_restore_std without LABEL (journal err) + blkmapd when NFS block layout unused.
+echo "Boot journal fixes: ALSA udev label, reinstall alsa-utils, blkmapd..."
+apt install --reinstall -y alsa-utils udev 2>/dev/null || true
+if [[ -x "$RAGNAR_DIR/scripts/fix_alsa_udev_restore_label.sh" ]]; then
+  "$RAGNAR_DIR/scripts/fix_alsa_udev_restore_label.sh" || true
+elif [[ -f "$INSTALLER_DIR/Ragnar/scripts/fix_alsa_udev_restore_label.sh" ]]; then
+  chmod +x "$INSTALLER_DIR/Ragnar/scripts/fix_alsa_udev_restore_label.sh"
+  bash "$INSTALLER_DIR/Ragnar/scripts/fix_alsa_udev_restore_label.sh" || true
+fi
+if [[ "${RAGNAR_INSTALLER_KEEP_BLKMAPD:-0}" != "1" ]]; then
+  if systemctl list-unit-files 2>/dev/null | grep -q '^blkmapd.service'; then
+    echo "  Disabling blkmapd (NFS block-layout helper). Need it? Re-run installer with RAGNAR_INSTALLER_KEEP_BLKMAPD=1"
+    systemctl disable --now blkmapd.service 2>/dev/null || true
+  fi
+fi
+
+echo "Pi boot mitigations (Wi-Fi, kernel/firmware, ALSA; Bluetooth unit; NM fallback AP on client failure)..."
+chmod +x "$RAGNAR_DIR/scripts/ragnar_pi_boot_mitigations.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_wifi.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_bluetooth.sh" "$RAGNAR_DIR/scripts/ragnar_verify_kernel_firmware.sh" "$RAGNAR_DIR/scripts/ragnar_repair_alsa_divert.sh" "$RAGNAR_DIR/scripts/ragnar_wait_network_ready.sh" "$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh" 2>/dev/null || true
+export RAGNAR_WIFI_REG="${RAGNAR_WIFI_REG:-US}"
+bash "$RAGNAR_DIR/scripts/ragnar_pi_boot_mitigations.sh" 2>/dev/null || true
+cat > /etc/systemd/system/ragnar-boot-mitigations.service <<MITIGSVC
+[Unit]
+Description=Ragnar deterministic boot mitigations (before network-online / ragnar)
+After=systemd-udevd.service NetworkManager.service
+Before=network-online.target ragnar.service
+Wants=network-pre.target NetworkManager.service
+
+[Service]
+Type=oneshot
+User=root
+RemainAfterExit=yes
+Environment=RAGNAR_WIFI_REG=${RAGNAR_WIFI_REG:-US}
+Environment=RAGNAR_NET_WAIT_SEC=120
+Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
+ExecStart=$RAGNAR_DIR/scripts/ragnar_pi_boot_mitigations.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+MITIGSVC
+cat > /etc/systemd/system/ragnar-mitigate-bluetooth.service <<BTSVC
+[Unit]
+Description=Ragnar Bluetooth stabilization (rfkill, adapter)
+After=systemd-udevd.service
+Before=ragnar.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
+ExecStart=$RAGNAR_DIR/scripts/ragnar_mitigate_bluetooth.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+BTSVC
+cat > /etc/systemd/system/ragnar-fallback-ap.service <<FALLBACKSVC
+[Unit]
+Description=Ragnar NM fallback hotspot (Ragnar-Setup) when client networking failed
+After=NetworkManager.service ragnar-boot-mitigations.service
+ConditionPathExists=/var/run/ragnar-network-degraded
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
+ExecStart=$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh start
+ExecStop=$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh stop
+StandardOutput=journal
+StandardError=journal
+
+FALLBACKSVC
+systemctl daemon-reload
+systemctl enable ragnar-boot-mitigations.service 2>/dev/null || true
+systemctl enable ragnar-mitigate-bluetooth.service 2>/dev/null || true
+echo "  Installed ragnar-fallback-ap.service (manual start; boot invokes NM hotspot from wait script)"
 
 echo "Installing Waveshare display library..."
 cd "$HOME_DIR"
@@ -1616,108 +1692,15 @@ if display_py.exists():
 PY
 fi
 
-# Boot splash for Display HAT Mini: use script from repo if present, else create it
+# Boot splash for Display HAT Mini: copy from repo bundle (button test + boot log)
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   mkdir -p "$RAGNAR_DIR/scripts"
-  if [ ! -f "$RAGNAR_DIR/scripts/display_boot_splash.py" ]; then
-    cat > "$RAGNAR_DIR/scripts/display_boot_splash.py" <<'SPLASH'
-#!/usr/bin/env python3
-"""Display HAT Mini boot splash: show Booting / Starting Ragnar / boot log / Loading."""
-import os
-import subprocess
-import sys
-import time
-def _get_boot_log_lines(max_lines=10, line_chars=48):
-    try:
-        out = subprocess.check_output(
-            ["journalctl", "-b", "-n", str(max_lines * 2), "--no-pager", "-o", "short-iso"],
-            timeout=5, text=True)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return ["(journal unavailable)"]
-    lines = []
-    for raw in out.strip().splitlines():
-        raw = (raw or "").strip()
-        if not raw:
-            continue
-        if len(raw) > line_chars:
-            while raw:
-                lines.append(raw[:line_chars])
-                raw = raw[line_chars:].lstrip()
-        else:
-            lines.append(raw)
-        if len(lines) >= max_lines:
-            break
-    return lines[-max_lines:] if len(lines) > max_lines else lines
-def main():
-    try:
-        from PIL import Image, ImageDraw
-        from waveshare_epd import displayhatmini
-    except ImportError:
-        return 0
-    BG, FG = (0, 0, 0), (255, 255, 255)
-    try:
-        epd = displayhatmini.EPD()
-        if epd.init() != 0:
-            return 1
-        W, H = epd.width, epd.height
-        epd.Clear(0)
-    except Exception:
-        return 1
-    try:
-        try:
-            font_big = __import__("PIL.ImageFont", fromlist=["truetype"]).ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
-        except Exception:
-            font_big = None
-        try:
-            font_small = __import__("PIL.ImageFont", fromlist=["truetype"]).ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
-        except Exception:
-            font_small = None
-        for text, duration in [("Booting...", 2.0), ("Starting Ragnar...", 2.0)]:
-            img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
-            draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
-            if font_big:
-                bbox = draw.textbbox((0, 0), text, font=font_big)
-            else:
-                bbox = (0, 0, len(text) * 8, 20)
-            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            x, y = (W - tw) // 2, (H - th) // 2
-            draw.text((x, y), text, font=font_big, fill=FG)
-            epd.display(img)
-            time.sleep(duration)
-        log_lines = _get_boot_log_lines(max_lines=10, line_chars=48)
-        img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
-        draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
-        draw.text((4, 2), "Boot log:", font=font_small, fill=FG)
-        y = 16
-        for line in log_lines:
-            if y + 14 > H:
-                break
-            draw.text((4, y), line[:52], font=font_small, fill=FG)
-            y += 13
-        epd.display(img)
-        time.sleep(6.0)
-        img = __import__("PIL.Image", fromlist=["new"]).Image.new("RGB", (W, H), BG)
-        draw = __import__("PIL.ImageDraw", fromlist=["Draw"]).ImageDraw.Draw(img)
-        text = "Loading..."
-        if font_big:
-            bbox = draw.textbbox((0, 0), text, font=font_big)
-        else:
-            bbox = (0, 0, len(text) * 8, 20)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x, y = (W - tw) // 2, (H - th) // 2
-        draw.text((x, y), text, font=font_big, fill=FG)
-        epd.display(img)
-        time.sleep(4.0)
-    except Exception:
-        pass
-    return 0
-if __name__ == "__main__":
-    sys.exit(main())
-SPLASH
+  if [ -f "$INSTALLER_DIR/Ragnar/scripts/display_boot_splash.py" ]; then
+    cp -a "$INSTALLER_DIR/Ragnar/scripts/display_boot_splash.py" "$RAGNAR_DIR/scripts/"
+    chmod +x "$RAGNAR_DIR/scripts/display_boot_splash.py"
+  else
+    echo "WARNING: Ragnar/scripts/display_boot_splash.py missing from installer bundle" >&2
   fi
-  chmod +x "$RAGNAR_DIR/scripts/display_boot_splash.py"
   BOOT_SPLASH_LINE="ExecStartPre=/usr/bin/python3 $RAGNAR_DIR/scripts/display_boot_splash.py"
   BOOT_SPLASH_ENV="Environment=DISPLAY_BOOT_W=$DISPLAYHATMINI_REF_W DISPLAY_BOOT_H=$DISPLAYHATMINI_REF_H"
 else
@@ -1911,10 +1894,10 @@ echo "Creating service..."
 cat > /etc/systemd/system/ragnar.service <<SVCEOF
 [Unit]
 Description=ragnar Service
-# After=basic.target + network.target (not network-online): no routable-IP wait.
+# After mitigations + supervised Bluetooth: boot-mitigations waits for link + IPv4 + connectivity (not network-online.target — avoids cycles).
 # PiSugar is never in After= — soft Wants= only.
-After=basic.target network.target ssh.service$DISPLAY_AFTER_BOOT
-Wants=network.target network-online.target$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
+After=basic.target network.target ragnar-boot-mitigations.service ragnar-mitigate-bluetooth.service ssh.service$DISPLAY_AFTER_BOOT
+Wants=network.target ragnar-boot-mitigations.service ragnar-mitigate-bluetooth.service$DISPLAY_WANTS_BOOT$PISUGAR_WANTS_SUFFIX
 # 0 = disable start rate limiting (allows restart storms during bring-up; pair with RestartSec)
 StartLimitIntervalSec=0
 
@@ -2020,7 +2003,6 @@ Type=oneshot
 User=root
 Group=root
 UMask=0022
-Environment=RAGNAR_BOOT_ERRORS_QUIET_KNOWN=1
 ExecStartPre=/bin/sleep 35
 ExecStart=$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh
 
@@ -2032,17 +2014,17 @@ systemctl enable ragnar-boot-log-to-firmware.service 2>/dev/null || true
 echo "  Enabled: ragnar-boot-log-to-firmware.service (~35s after boot -> Boot_Log/ragnar-boot-<stamp>.log, latest-boot-errors.log)"
 "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" 2>/dev/null || true
 
-# Help network-online.target actually wait for Wi-Fi/Ethernet on Bookworm (optional unit)
+# Ragnar uses ragnar_wait_network_ready.sh — disable stock wait to avoid races / cycles with mitigations.
 if systemctl list-unit-files 2>/dev/null | grep -q '^NetworkManager-wait-online.service'; then
-  systemctl enable NetworkManager-wait-online.service 2>/dev/null || true
-  echo "Enabled NetworkManager-wait-online.service (improves After=network-online.target for ragnar)."
+  systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+  echo "  Disabled NetworkManager-wait-online.service (Ragnar mitigations own readiness + connectivity)."
 fi
 if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-online.service'; then
   systemctl enable systemd-networkd-wait-online.service 2>/dev/null || true
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" "$RAGNAR_DIR/scripts/fix_alsa_udev_restore_label.sh" "$RAGNAR_DIR/scripts/ragnar_pi_boot_mitigations.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_wifi.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_bluetooth.sh" "$RAGNAR_DIR/scripts/ragnar_verify_kernel_firmware.sh" "$RAGNAR_DIR/scripts/ragnar_repair_alsa_divert.sh" "$RAGNAR_DIR/scripts/ragnar_wait_network_ready.sh" "$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service

@@ -11,7 +11,6 @@ Type=oneshot
 User=root
 Group=root
 UMask=0022
-Environment=RAGNAR_BOOT_ERRORS_QUIET_KNOWN=1
 # Let systemd/journal settle so the export includes most of this boot.
 ExecStartPre=/bin/sleep 35
 ExecStart=/home/ragnar/Ragnar/scripts/export_boot_log_to_firmware.sh

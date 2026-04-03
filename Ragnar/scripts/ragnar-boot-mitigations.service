@@ -1,0 +1,25 @@
+# Ragnar: Wi-Fi/kernel/ALSA + network readiness BEFORE network-online / ragnar.
+# Do NOT add After=network-online.target (ordering cycle). Do NOT order against
+# NetworkManager-wait-online — installer disables that unit; we use ragnar_wait_network_ready.sh.
+
+[Unit]
+Description=Ragnar deterministic boot mitigations (before network-online / ragnar)
+DefaultDependencies=yes
+After=systemd-udevd.service NetworkManager.service
+Before=network-online.target ragnar.service
+Wants=network-pre.target
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+User=root
+RemainAfterExit=yes
+Environment=RAGNAR_WIFI_REG=US
+Environment=RAGNAR_NET_WAIT_SEC=120
+Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
+ExecStart=/home/ragnar/Ragnar/scripts/ragnar_pi_boot_mitigations.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

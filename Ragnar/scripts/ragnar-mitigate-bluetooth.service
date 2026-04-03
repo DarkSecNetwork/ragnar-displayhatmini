@@ -1,0 +1,20 @@
+# Supervised Bluetooth stabilization (replaces nohup from ragnar_pi_boot_mitigations).
+# Runs in parallel with ragnar-boot-mitigations; ragnar starts after both.
+
+[Unit]
+Description=Ragnar Bluetooth stabilization (rfkill, adapter)
+After=systemd-udevd.service
+Before=ragnar.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
+ExecStart=/home/ragnar/Ragnar/scripts/ragnar_mitigate_bluetooth.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

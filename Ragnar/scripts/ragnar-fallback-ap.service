@@ -1,0 +1,17 @@
+# Boot-time AP is started by ragnar_wait_network_ready.sh (same ExecStart) so we do not double-start via multi-user.
+# After=mitigations: safe for manual `systemctl start ragnar-fallback-ap` once /var/run/ragnar-network-degraded exists.
+
+[Unit]
+Description=Ragnar NM fallback hotspot (Ragnar-Setup) when client networking failed
+After=NetworkManager.service ragnar-boot-mitigations.service
+ConditionPathExists=/var/run/ragnar-network-degraded
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
+ExecStart=/home/ragnar/Ragnar/scripts/ragnar_fallback_ap.sh start
+ExecStop=/home/ragnar/Ragnar/scripts/ragnar_fallback_ap.sh stop
+StandardOutput=journal
+StandardError=journal
