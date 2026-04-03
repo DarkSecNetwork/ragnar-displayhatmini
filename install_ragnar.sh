@@ -831,9 +831,10 @@ PYDIAG
       sed -i 's/pisugar[<>=!].*/pisugar>=0.1.1/' requirements.txt 2>/dev/null || true
       sed -i 's/^pisugar$/pisugar>=0.1.1/' requirements.txt 2>/dev/null || true
       sed -i 's/spidev==3\.5/spidev>=3.6.0/' requirements.txt 2>/dev/null || true
+      sed -i 's/^netifaces==.*/netifaces-plus>=0.12.0/' requirements.txt 2>/dev/null || true
       sed -i 's/cryptography.*/cryptography<45,>=41.0.5/' requirements.txt 2>/dev/null || true
     fi
-    pip3 install --break-system-packages --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
+    pip3 install --break-system-packages --prefer-binary --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" 2>/dev/null || true
     pip3 install --break-system-packages --no-cache-dir pillow numpy pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" paramiko st7789 2>/dev/null || true
     fixes_applied=$((fixes_applied + 1))
   fi
@@ -1306,18 +1307,25 @@ if [ -f requirements.txt ]; then
   sed -i 's/^pisugar$/pisugar>=0.1.1/' requirements.txt 2>/dev/null || true
   # Fix spidev for st7789 compatibility
   sed -i 's/spidev==3\.5/spidev>=3.6.0/' requirements.txt 2>/dev/null || true
+  # Migrate legacy netifaces pin to netifaces-plus (prebuilt wheels on modern Python)
+  sed -i 's/^netifaces==.*/netifaces-plus>=0.12.0/' requirements.txt 2>/dev/null || true
+  sed -i 's/^netifaces$/netifaces-plus>=0.12.0/' requirements.txt 2>/dev/null || true
   # Fix cryptography for pyopenssl compatibility
   sed -i 's/cryptography.*/cryptography<45,>=41.0.5/' requirements.txt 2>/dev/null || true
+  # Raspberry Pi OS: distro GPIO/SPI packages avoid long pip gcc builds; python3-dev for any compile fallback
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get install -y build-essential python3-dev python3-rpi.gpio python3-spidev 2>/dev/null || true
+  fi
   # libcap-dev (installed above) is required for python-prctl (Ragnar upstream requirement)
-  # Install requirements, suppressing deprecation warnings
-  pip3 install --break-system-packages --ignore-installed --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" || true
+  # --prefer-binary: use wheels; omit --ignore-installed so apt/distro packages are not force-rebuilt from source
+  pip3 install --break-system-packages --prefer-binary --no-cache-dir -r requirements.txt 2>&1 | grep -v "DEPRECATION:" || true
   # If python-prctl still failed (e.g. libcap not found), try without it so Ragnar can start
   if ! python3 -c "import prctl" 2>/dev/null; then
     echo "  python-prctl not available (optional); continuing..."
   fi
 fi
 # Install core packages (--no-cache-dir avoids invalid cached wheels e.g. paramiko-0.9_ivysaur from Pwnagotchi)
-pip3 install --break-system-packages --ignore-installed --no-cache-dir paramiko st7789 luma.lcd luma.core pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" openai "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
+pip3 install --break-system-packages --prefer-binary --no-cache-dir paramiko st7789 luma.lcd luma.core pandas pandas-stubs "Flask-SQLAlchemy>=3.0.1" openai "cryptography<45" 2>&1 | grep -v "DEPRECATION:" || true
 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing Display HAT Mini dependencies (gpiod, gpiodevice, gpiozero, lgpio)..."

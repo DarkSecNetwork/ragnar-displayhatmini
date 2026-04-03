@@ -18,12 +18,12 @@ import re
 # Try to import network interface library
 netifaces = None
 try:
-    import netifaces  # type: ignore
+    import netifaces_plus as netifaces  # type: ignore
 except ImportError:
     try:
-        import netifaces_plus as netifaces  # type: ignore
+        import netifaces  # type: ignore
     except ImportError:
-        print("Warning: Neither netifaces nor netifaces-plus found. Network discovery may be limited.")
+        print("Warning: Neither netifaces-plus nor netifaces found. Network discovery may be limited.")
 import time
 import glob
 import logging

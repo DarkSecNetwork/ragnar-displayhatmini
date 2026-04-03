@@ -5,10 +5,12 @@ set -uo pipefail
 
 LOG="${RAGNAR_MITIGATION_LOG:-/var/log/ragnar-mitigations.log}"
 CON_NAME="${RAGNAR_FALLBACK_AP_CON_NAME:-Ragnar-Setup}"
-SSID="${RAGNAR_FALLBACK_AP_SSID:-Ragnar-Setup}"
-PASS="${RAGNAR_FALLBACK_AP_PASSWORD:-ragnar123}"
+SSID="${RAGNAR_FALLBACK_AP_SSID:-Ragnar}"
+PASS="${RAGNAR_FALLBACK_AP_PASSWORD:-ragnarconnect}"
 IFACE="${RAGNAR_FALLBACK_AP_IFACE:-}"
 MODE="${1:-start}"
+RUN_DIR="${RAGNAR_RUN_DIR:-/run/ragnar}"
+CRED_FILE="${RAGNAR_HOTSPOT_ENV_FILE:-$RUN_DIR/hotspot-credentials.env}"
 
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 _log() { echo "$1" | tee -a "$LOG" 2>/dev/null || echo "$1"; }
@@ -27,6 +29,7 @@ systemctl start NetworkManager.service 2>/dev/null || true
 
 _stop() {
   echo "--- Ragnar fallback AP: stop (restore client mode on ${IFACE}) ---"
+  rm -f "$CRED_FILE" 2>/dev/null || true
   if nmcli -t -f NAME connection show 2>/dev/null | grep -qx "$CON_NAME"; then
     nmcli connection down "$CON_NAME" 2>/dev/null || true
     _log "$(date -Is) fallback AP: connection down ${CON_NAME}"
@@ -71,6 +74,13 @@ _start() {
   echo "[✔] AP active: connect to SSID \"${SSID}\" (WPA2) — then SSH / web UI"
   echo "    IPv4 on ${IFACE}: ${ip4:-pending (NM shared, often 10.42.x.x)}"
   _log "$(date -Is) [✔] Fallback AP up ${CON_NAME} ${ip4:-unknown}"
+  mkdir -p "$RUN_DIR" 2>/dev/null || true
+  {
+    echo "RAGNAR_HOTSPOT_SSID=${SSID}"
+    echo "RAGNAR_HOTSPOT_PASSWORD=${PASS}"
+  } > "${CRED_FILE}.tmp" 2>/dev/null && mv -f "${CRED_FILE}.tmp" "$CRED_FILE" 2>/dev/null || true
+  export RAGNAR_HOTSPOT_SSID="$SSID"
+  export RAGNAR_HOTSPOT_PASSWORD="$PASS"
   return 0
 }
 

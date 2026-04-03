@@ -84,6 +84,7 @@ try:
         STATE_FULL_MENU,
         STATE_NETWORK_MODE,
         STATE_HOTSPOT,
+        STATE_HOTSPOT_QR,
         dhm_state_ui_enabled,
         map_hardware_event_to_logical,
         handle_dhm_state_event,
@@ -92,7 +93,7 @@ except ImportError:
     STATE_HOME = "HOME"
     STATE_MENU = "MENU"
     STATE_SETTINGS = "SETTINGS"
-    STATE_WIFI_MENU = STATE_WIFI_LIST = STATE_FULL_MENU = STATE_NETWORK_MODE = STATE_HOTSPOT = "UNAVAILABLE"
+    STATE_WIFI_MENU = STATE_WIFI_LIST = STATE_FULL_MENU = STATE_NETWORK_MODE = STATE_HOTSPOT = STATE_HOTSPOT_QR = "UNAVAILABLE"
 
     def dhm_state_ui_enabled():
         return False
@@ -163,6 +164,8 @@ class Display:
         self.menu_cursor = 0
         self.menu_scroll = 0
         self.dhm_ui = None
+        self._dhm_ui_renderer = None  # lazy UIRenderer for DHM status strip (Wi‑Fi / BT / battery)
+        self._dhm_ui_renderer_failed_for = None  # (W, H) after UIRenderer init failure; retry if panel size changes
         epd_type = self.config.get("epd_type", "")
         self._dhm_state_ui = (
             epd_type == "displayhatmini"
@@ -838,6 +841,38 @@ class Display:
                     draw.text((2, y), text[:42], font=font, fill=0)
             y += line_height
 
+    def _get_dhm_ui_renderer(self):
+        """Shared :class:`~ui_renderer.UIRenderer` for DHM (matches standalone menu/hotspot glyphs)."""
+        try:
+            from ui_renderer import UIRenderer
+        except ImportError:
+            return None
+        W = int(self.shared_data.width)
+        H = int(self.shared_data.height)
+        r = self._dhm_ui_renderer
+        if r is not None and r.width == W and r.height == H:
+            return r
+        if self._dhm_ui_renderer_failed_for == (W, H):
+            return None
+        try:
+            self._dhm_ui_renderer = UIRenderer(W, H, show_menu_wifi_footer=False)
+            self._dhm_ui_renderer_failed_for = None
+        except Exception as e:
+            self._dhm_ui_renderer = None
+            self._dhm_ui_renderer_failed_for = (W, H)
+            logger.debug("DHM status strip: UIRenderer init failed (%s)", e)
+            return None
+        return self._dhm_ui_renderer
+
+    def _dhm_draw_status_strip(self, draw):
+        """Top-right Wi‑Fi/BT/battery glyphs; never raises (isolates UIRenderer from main loop)."""
+        try:
+            ur = self._get_dhm_ui_renderer()
+            if ur is not None:
+                ur._draw_status_icons_menu(draw)
+        except Exception as e:
+            logger.debug("DHM status strip draw failed: %s", e)
+
     def _render_dhm_root_menu(self, image, draw):
         """State UI: root menu — 32px icons, 40px rows, bold type, inverted selection, icon bounce."""
         try:
@@ -891,6 +926,8 @@ class Display:
             fill = 255 if highlight else 0
             draw.text((text_x, ty), label, font=font_row, fill=fill)
 
+        self._dhm_draw_status_strip(draw)
+
     def _render_dhm_wifi_menu(self, image, draw):
         """WiFi hub: scan / connect / back."""
         try:
@@ -925,6 +962,7 @@ class Display:
                 draw.text((2, y), line, font=font, fill=255)
             else:
                 draw.text((2, y), line, font=font, fill=0)
+        self._dhm_draw_status_strip(draw)
 
     def _render_dhm_wifi_list(self, image, draw):
         """Scanned SSID list with smooth scroll."""
@@ -961,6 +999,7 @@ class Display:
                 draw.text((2, y), line, font=font, fill=255)
             else:
                 draw.text((2, y), line, font=font, fill=0)
+        self._dhm_draw_status_strip(draw)
         draw.text((2, H - 12), "B: connect  Y: back", font=font, fill=0)
 
     def _dhm_hotspot_qr_image(self, data: str, size: tuple):
@@ -994,6 +1033,30 @@ class Display:
         except Exception:
             font = font_b = ImageDraw.ImageFont.load_default()
         draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        ur = self._get_dhm_ui_renderer()
+        sc = ur.wifi_icon_scale if ur else 2
+        w5 = 5 * sc
+        title_x = 2 + w5 + 4 if ur else 2
+        blink_on = (int(time.time() * 2) % 2) == 0
+        if ur and blink_on:
+            ur.draw_hotspot_icon(draw, 2, 2, fill=0)
+        show_sta = (
+            ur is not None
+            and os.environ.get("RAGNAR_UI_SHOW_STA_ON_HOTSPOT", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        sta_line = ""
+        if show_sta and ur is not None:
+            try:
+                wst = ur.get_wifi_status()
+                if wst.get("connected") and wst.get("ssid"):
+                    sta_line = f"STA {wst['ssid'][:18]} {wst['signal']}%"
+            except Exception:
+                pass
+        content_top = 14
+        if sta_line:
+            draw.text((2, 14), sta_line[:44], font=font, fill=0)
+            content_top = 26
         wifi_qr = p["wifi_qr"]
         flip = bool(getattr(ui, "hotspot_view_flip", False)) if ui else False
         show_qr = (int(time.time()) % 6 < 3) ^ flip
@@ -1001,8 +1064,8 @@ class Display:
         footer_h = 12
 
         if show_qr:
-            draw.text((2, 0), "Scan to connect", font=font_b, fill=0)
-            y = 14
+            draw.text((title_x, 0), "Scan to connect", font=font_b, fill=0)
+            y = content_top
             qsize = min(120, W - 8, H - footer_h - y - 28)
             if qsize >= 48:
                 qim = self._dhm_hotspot_qr_image(wifi_qr, (qsize, qsize))
@@ -1014,8 +1077,8 @@ class Display:
                 draw.text((2, min(y2, H - footer_h - 34)), "Device connected!", font=font_b, fill=0)
             draw.text((2, H - footer_h - 11), f"Join: {p['ssid'][:22]}", font=font, fill=0)
         else:
-            draw.text((2, 0), "Ragnar Setup", font=font_b, fill=0)
-            y = 14
+            draw.text((title_x, 0), "Ragnar Setup", font=font_b, fill=0)
+            y = content_top
             draw.text((2, y), f"SSID: {p['ssid'][:28]}", font=font, fill=0)
             y += 12
             draw.text((2, y), f"PASS: {p['password'][:24]}", font=font, fill=0)
@@ -1027,6 +1090,7 @@ class Display:
             draw.text((2, y), f"Clients: {clients}", font=font, fill=0)
             if clients > 0:
                 draw.text((2, y + 12), "Device connected!", font=font_b, fill=0)
+        self._dhm_draw_status_strip(draw)
         draw.text(
             (2, H - footer_h),
             "B:exit  A/X:view  Y:retry",
@@ -1071,6 +1135,7 @@ class Display:
                 draw.text((2, y), line, font=font, fill=255)
             else:
                 draw.text((2, y), line, font=font, fill=0)
+        self._dhm_draw_status_strip(draw)
         draw.text((2, H - 12), "B: select  Y: back", font=font, fill=0)
 
     def _render_dhm_wifi_settings(self, image, draw):
@@ -1096,6 +1161,7 @@ class Display:
         draw.text((2, y), f"IP: {str(ip)[:36]}", font=font, fill=0)
         y += 18
         draw.text((2, y), "Y: Back", font=font, fill=0)
+        self._dhm_draw_status_strip(draw)
 
     def _dhm_restore_brightness(self):
         """After button input, undo idle dim if the ST7789 driver exposes brightness."""
@@ -1770,10 +1836,15 @@ class Display:
                 if self.dhm_listener and self.dhm_listener.available:
                     if self._dhm_state_ui and self.dhm_ui:
                         try:
-                            from dhm_ui_state import sync_hotspot_screen, check_hotspot_idle_timeout
+                            from dhm_ui_state import (
+                                check_hotspot_idle_timeout,
+                                check_hotspot_qr_idle_timeout,
+                                sync_hotspot_screen,
+                            )
 
                             sync_hotspot_screen(self)
                             check_hotspot_idle_timeout(self)
+                            check_hotspot_qr_idle_timeout(self)
                         except Exception:
                             pass
                     self._drain_dhm_menu_events()
@@ -1790,7 +1861,7 @@ class Display:
                             )
 
                             st = self.dhm_ui.state
-                            if st == STATE_HOTSPOT:
+                            if st == STATE_HOTSPOT or st == STATE_HOTSPOT_QR:
                                 self._render_dhm_hotspot(image, draw)
                             elif st == STATE_FULL_MENU:
                                 self._render_settings_menu(image, draw)

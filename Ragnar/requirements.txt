@@ -1,17 +1,22 @@
-RPi.GPIO==0.7.1
-spidev==3.5
+# Native GPIO/SPI: prefer apt (python3-rpi.gpio python3-spidev) + --prefer-binary in installer
+# to avoid pip compiling C extensions for minutes on slow Pis / Python 3.12+.
+RPi.GPIO>=0.7.1
+spidev>=3.6.0
 Pillow>=10.0.0
+qrcode[pil]>=7.0.0
 numpy>=1.24.0
 rich>=13.0.0
 pandas>=2.0.0
-netifaces==0.11.0
+# Prefer wheels (see netifaces shim in webapp_modern.py); legacy netifaces optional
+netifaces-plus>=0.12.0
 ping3>=4.0.0
 get-mac>=0.9.0
 paramiko>=3.0.0
 smbprotocol>=1.10.0
 pysmb>=1.2.0
 pymysql>=1.0.0
-sqlalchemy>=1.4.0
+# 2.x has manylinux wheels for Python 3.11+ (avoids source builds)
+sqlalchemy>=2.0.0
 python-nmap>=0.7.0
 flask>=3.0.0
 flask-socketio>=5.3.0

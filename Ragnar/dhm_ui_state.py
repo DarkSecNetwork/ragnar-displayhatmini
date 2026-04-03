@@ -23,6 +23,8 @@ STATE_WIFI_LIST = "WIFI_LIST"
 STATE_FULL_MENU = "FULL_MENU"
 STATE_NETWORK_MODE = "NETWORK_MODE"
 STATE_HOTSPOT = "HOTSPOT"
+# Manual Wi‑Fi QR preview (dynamic SSID/pass from hotspot_config); does not require AP to be up
+STATE_HOTSPOT_QR = "HOTSPOT_QR"
 
 L_UP = "UP"
 L_DOWN = "DOWN"
@@ -34,10 +36,12 @@ LINE_HEIGHT = 16
 ROOT_MENU_ROW_HEIGHT = 40  # icon row height for state UI root menu (32px icon + padding)
 IDLE_DIM_SEC = 30.0
 HOTSPOT_IDLE_DEFAULT_SEC = 180.0
+HOTSPOT_QR_IDLE_DEFAULT_SEC = 120.0
 
 ROOT_MENU_SPEC = [
     {"label": "Network Mode", "action": "network_mode_hub", "icon": "network"},
     {"label": "WiFi", "action": "wifi_hub", "icon": "wifi"},
+    {"label": "Hotspot QR", "action": "hotspot_qr_preview", "icon": "hotspot"},
     {"label": "Bluetooth", "action": "bluetooth_toggle", "icon": "bluetooth"},
     {"label": "System Info", "action": "system_info", "icon": "system"},
     {"label": "All settings", "action": "full_settings_menu", "icon": "settings"},
@@ -98,6 +102,7 @@ class UIState:
         self.last_hotspot_activity: float = time.time()
         # XOR with 6s phase for QR vs text; A/X (L_UP/L_DOWN) flips this
         self.hotspot_view_flip: bool = False
+        self.hotspot_qr_start_time: float = 0.0
 
     def touch_input(self) -> None:
         self.last_input_time = time.time()
@@ -244,11 +249,23 @@ def _fallback_ap_con_name() -> str:
 
 
 def _fallback_ap_ssid() -> str:
-    return os.environ.get("RAGNAR_FALLBACK_AP_SSID", "Ragnar-Setup").strip() or "Ragnar-Setup"
+    try:
+        from hotspot_config import get_hotspot_credentials
+
+        s, _ = get_hotspot_credentials()
+        return s
+    except ImportError:
+        return os.environ.get("RAGNAR_FALLBACK_AP_SSID", "Ragnar").strip() or "Ragnar"
 
 
 def _fallback_ap_password() -> str:
-    return os.environ.get("RAGNAR_FALLBACK_AP_PASSWORD", "ragnar123").strip() or "ragnar123"
+    try:
+        from hotspot_config import get_hotspot_credentials
+
+        _, p = get_hotspot_credentials()
+        return p
+    except ImportError:
+        return os.environ.get("RAGNAR_FALLBACK_AP_PASSWORD", "ragnarconnect").strip() or "ragnarconnect"
 
 
 def get_ap_ipv4() -> str:
@@ -280,10 +297,16 @@ def web_ui_url(shared_data) -> str:
 
 
 def wifi_join_qr_string() -> str:
-    """WIFI: QR for WPA2 — matches fallback AP SSID/password."""
-    ssid = _fallback_ap_ssid()
-    pwd = _fallback_ap_password()
-    return f"WIFI:T:WPA;S:{ssid};P:{pwd};;"
+    """WIFI: QR for WPA2 — matches fallback AP SSID/password (hotspot_config + env + /run file)."""
+    try:
+        from hotspot_config import escape_wifi_qr_value, get_hotspot_credentials
+
+        ssid, pwd = get_hotspot_credentials()
+        return f"WIFI:T:WPA;S:{escape_wifi_qr_value(ssid)};P:{escape_wifi_qr_value(pwd)};;"
+    except ImportError:
+        ssid = _fallback_ap_ssid()
+        pwd = _fallback_ap_password()
+        return f"WIFI:T:WPA;S:{ssid};P:{pwd};;"
 
 
 def get_connected_wifi_clients() -> int:
@@ -301,6 +324,13 @@ def hotspot_idle_sec() -> float:
         return float(os.environ.get("RAGNAR_DHM_HOTSPOT_IDLE_SEC", "").strip() or HOTSPOT_IDLE_DEFAULT_SEC)
     except ValueError:
         return HOTSPOT_IDLE_DEFAULT_SEC
+
+
+def hotspot_qr_idle_sec() -> float:
+    try:
+        return float(os.environ.get("RAGNAR_DHM_HOTSPOT_QR_IDLE_SEC", "").strip() or HOTSPOT_QR_IDLE_DEFAULT_SEC)
+    except ValueError:
+        return HOTSPOT_QR_IDLE_DEFAULT_SEC
 
 
 def _hotspot_retry_wifi(display) -> None:
@@ -358,6 +388,8 @@ def sync_hotspot_screen(display) -> None:
         return
     if getattr(display.shared_data, "health_panel_open", False):
         return
+    if ui.state == STATE_HOTSPOT_QR:
+        return
     if not nm_fallback_ap_active():
         if ui.state == STATE_HOTSPOT:
             ui.state = STATE_HOME
@@ -405,6 +437,17 @@ def check_hotspot_idle_timeout(display) -> None:
         return
     logger.info("[NET] Hotspot inactivity timeout → WiFi client")
     _hotspot_exit_to_client(display)
+
+
+def check_hotspot_qr_idle_timeout(display) -> None:
+    """Manual Hotspot QR preview: auto-return to root menu after idle (default 120s)."""
+    ui: UIState = display.dhm_ui
+    if not ui or ui.state != STATE_HOTSPOT_QR:
+        return
+    if time.time() - ui.hotspot_qr_start_time < hotspot_qr_idle_sec():
+        return
+    logger.info("[DHM] Hotspot QR preview idle → menu")
+    ui.state = STATE_MENU
 
 
 def resolve_fallback_ap_script() -> Optional[str]:
@@ -593,6 +636,14 @@ def _dispatch_root_action(display, action: str, apply_select_fn: Callable) -> No
     if action == "shutdown":
         apply_select_fn(sd, _ITEM_SHUTDOWN)
         return
+    if action == "hotspot_qr_preview":
+        ui.state = STATE_HOTSPOT_QR
+        display.menu_visible = True
+        t = time.time()
+        ui.hotspot_qr_start_time = t
+        ui.last_hotspot_activity = t
+        ui.hotspot_view_flip = False
+        return
     logger.debug("dhm_ui_state: unknown root action %s", action)
 
 
@@ -678,11 +729,29 @@ def handle_dhm_state_event(display, logical: str, apply_select_fn: Callable) -> 
 
     state = ui.state
 
+    if state == STATE_HOTSPOT_QR:
+        if logical in (L_BACK, L_SELECT):
+            ui.state = STATE_MENU
+        elif logical in (L_UP, L_DOWN):
+            ui.hotspot_view_flip = not ui.hotspot_view_flip
+        ui.last_hotspot_activity = time.time()
+        ui.hotspot_qr_start_time = time.time()
+        return
+
     if state == STATE_HOTSPOT:
         if logical == L_SELECT:
             _hotspot_exit_to_client(display)
         elif logical == L_BACK:
-            _hotspot_retry_wifi(display)
+            if os.environ.get("RAGNAR_DHM_HOTSPOT_BACK_TO_MENU", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                ui.state = STATE_MENU
+                display.menu_visible = True
+            else:
+                _hotspot_retry_wifi(display)
         elif logical in (L_UP, L_DOWN):
             ui.hotspot_view_flip = not ui.hotspot_view_flip
         ui.last_hotspot_activity = time.time()

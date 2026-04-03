@@ -26,6 +26,12 @@ import shutil
 import importlib
 import hashlib
 import ipaddress
+# Prefer netifaces-plus (prebuilt wheels); register so `import netifaces` works site-wide.
+try:
+    import netifaces_plus as _netifaces_pkg  # type: ignore
+except ImportError:
+    import netifaces as _netifaces_pkg  # type: ignore
+sys.modules["netifaces"] = _netifaces_pkg
 import socket
 import traceback
 from datetime import datetime, timedelta, timezone
