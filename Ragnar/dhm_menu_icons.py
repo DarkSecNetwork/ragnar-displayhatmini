@@ -13,34 +13,10 @@ from typing import Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
+from dhm_strip_metrics import dhm_menu_right_reserved_px
+from dhm_strip_metrics import wifi_icon_scale_for_layout as _wifi_icon_scale_for_layout
+
 ICON_SIZE_DEFAULT = 32
-
-# Must match ui_renderer.STATUS_GAP (Wi‑Fi / BT / battery strip spacing).
-_STATUS_STRIP_GAP = 4
-
-
-def _wifi_icon_scale_for_layout(screen_w: int) -> int:
-    """Same default as UIRenderer.wifi_icon_scale for strip width reservation."""
-    env = os.environ.get("RAGNAR_UI_WIFI_ICON_SCALE", "").strip()
-    if env:
-        try:
-            return max(1, int(env))
-        except ValueError:
-            pass
-    return 2 if screen_w <= 200 else 1
-
-
-def dhm_menu_right_reserved_px(screen_w: int, wifi_icon_scale: Optional[int] = None) -> int:
-    """
-    Horizontal space to keep clear on the right for the status strip (Wi‑Fi + BT + battery).
-
-    Always reserves three glyph slots so text does not jump when battery appears/disappears.
-    """
-    sc = wifi_icon_scale if wifi_icon_scale is not None else _wifi_icon_scale_for_layout(screen_w)
-    w5 = 5 * max(1, sc)
-    n = 3
-    # Right margin 4px + three 5×5 tiles + two gaps + cushion before labels
-    return 4 + n * w5 + (n - 1) * _STATUS_STRIP_GAP + 8
 
 
 def fit_text_to_width(
@@ -80,40 +56,6 @@ def fit_text_to_width(
         return text[:n] if n else text[:1]
 
 
-def _clamp_menu_icon_for_label_room(
-    screen_w: int,
-    screen_h: int,
-    icon: int,
-    row: int,
-    title_h: int,
-) -> Tuple[int, int, int]:
-    """Shrink row icons if needed so labels clear the right-hand status strip."""
-    w = max(1, int(screen_w))
-    h = max(1, int(screen_h))
-    m = min(w, h)
-    wifi_sc = _wifi_icon_scale_for_layout(w)
-    reserved = dhm_menu_right_reserved_px(w, wifi_sc)
-    min_label = 48
-    max_icon = w - 4 - 6 - min_label - reserved
-    max_icon = max(16, min(36, max_icon))
-    if max_icon % 2:
-        max_icon -= 1
-    if icon <= max_icon:
-        return (icon, row, title_h)
-    icon = max_icon
-    pad = max(6, min(12, m // 16))
-    row = icon + pad
-    body = max(1, h - title_h - 2)
-    max_row = max(24, int(body / 2.2))
-    if row > max_row:
-        row = max_row
-        icon = max(16, row - pad)
-        if icon % 2:
-            icon -= 1
-        icon = min(icon, max_icon)
-    return (icon, row, title_h)
-
-
 def dhm_root_menu_layout(screen_w: int, screen_h: int) -> Tuple[int, int, int]:
     """
     Icon size, row height, and title band height for the DHM root / UIRenderer menu.
@@ -121,47 +63,12 @@ def dhm_root_menu_layout(screen_w: int, screen_h: int) -> Tuple[int, int, int]:
     Scales with the shorter panel side so 128×128, 240×320, etc. get proportional glyphs
     instead of a fixed 32×32 in 40px rows. Optional override: ``RAGNAR_MENU_ICON_PX`` (even
     16–40 recommended); row height follows as icon + padding.
-    """
-    w = max(1, int(screen_w))
-    h = max(1, int(screen_h))
-    env = os.environ.get("RAGNAR_MENU_ICON_PX", "").strip()
-    if env:
-        try:
-            icon_ov = max(16, min(40, int(env)))
-            if icon_ov % 2:
-                icon_ov -= 1
-            title_h = max(18, min(28, h // 7))
-            pad = max(6, min(12, min(w, h) // 18))
-            row = icon_ov + pad
-            max_row = max(26, int((h - title_h - 2) / 2.2))
-            if row > max_row:
-                row = max_row
-                icon_ov = max(16, row - pad)
-                if icon_ov % 2:
-                    icon_ov -= 1
-            return _clamp_menu_icon_for_label_room(w, h, icon_ov, row, title_h)
-        except ValueError:
-            pass
 
-    m = min(w, h)
-    title_h = max(18, min(28, int(h * 0.11 + 8)))
-    # Icon: scale with panel; keep even for crisp 1-bit scaling
-    raw = (m * 13) // 100 + 10
-    icon = max(18, min(36, raw))
-    if icon % 2:
-        icon -= 1
-    pad = max(6, min(12, m // 16))
-    row = icon + pad
-    # Cap row height so at least ~2.2 menu rows stay visible (scroll still works below)
-    body = max(1, h - title_h - 2)
-    max_row = max(26, int(body / 2.2))
-    if row > max_row:
-        row = max_row
-        icon = max(16, row - pad)
-        if icon % 2:
-            icon -= 1
-        icon = max(16, min(36, icon))
-    return _clamp_menu_icon_for_label_room(w, h, icon, row, title_h)
+    Implementation: :func:`dhm_layout.compute_root_menu_layout_tuple` (single source of truth).
+    """
+    from dhm_layout import compute_root_menu_layout_tuple
+
+    return compute_root_menu_layout_tuple(screen_w, screen_h)
 
 
 # Avoid reopening/decoding PNGs every frame when the same icon+size repeats.

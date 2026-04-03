@@ -4,6 +4,12 @@
 # Download and run (correct URL includes main/):
 #   wget https://raw.githubusercontent.com/DarkSecNetwork/ragnar-displayhatmini/main/install_ragnar.sh
 #   sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
+#
+# Env (optional):
+#   RAGNAR_INSTALLER_LOG          — log path (default /var/log/ragnar-installer.log)
+#   RAGNAR_INSTALLER_GPU_MEM      — skip|none|min|<n> — see Ragnar/scripts/boot_validate.inc
+#   RAGNAR_INSTALLER_BACKUP_APP=1 — tar ~/Ragnar to /var/backups before replacing (re-runs)
+#   RAGNAR_INSTALLER_PERF_TUNING=1 — not recommended on Pi Zero 2 W
 set -euo pipefail
 
 USER_NAME="ragnar"
@@ -89,6 +95,37 @@ ragnar_boot_restore_from_bak() {
   fi
 }
 
+ragnar_install_log() {
+  local ts msg logf
+  msg="$*"
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown-time")
+  logf="${RAGNAR_INSTALLER_LOG:-/var/log/ragnar-installer.log}"
+  if [[ -w "$(dirname "$logf")" ]] 2>/dev/null; then
+    echo "[$ts] [install] $msg" >>"$logf"
+  fi
+}
+ragnar_boot_partition_sync() {
+  sync
+}
+ragnar_installer_require_boot_files() {
+  local fw
+  fw="$(ragnar_boot_firmware_dir)"
+  if [[ ! -f "$fw/config.txt" ]]; then
+    echo "FATAL: $fw/config.txt not found — refusing to invent boot configuration." >&2
+    return 1
+  fi
+  if [[ ! -f "$fw/cmdline.txt" ]]; then
+    echo "FATAL: $fw/cmdline.txt not found." >&2
+    return 1
+  fi
+  return 0
+}
+ragnar_config_append_line_if_missing_safe() {
+  local line="$1" file="$2"
+  [[ -f "$file" ]] || return 0
+  grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >>"$file"
+}
+
 ragnar_validate_cmdline_file() {
   local f="$1"
   local line_count content
@@ -168,13 +205,208 @@ ragnar_validate_boot_after_install() {
   fi
   return "$err"
 }
+
+# --- gpu_mem production (keep in sync with Ragnar/scripts/boot_validate.inc) ---
+ragnar_installer_log() {
+  local ts msg logf
+  msg="$*"
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown-time")
+  logf="${RAGNAR_INSTALLER_LOG:-/var/log/ragnar-installer.log}"
+  if [[ -w "$(dirname "$logf")" ]] 2>/dev/null; then
+    echo "[$ts] [gpu_mem] $msg" >>"$logf"
+  fi
+  echo "  [gpu_mem] $msg" >&2
+}
+ragnar_probe_mem_total_mb() {
+  if [[ -r /proc/meminfo ]]; then
+    awk '/^MemTotal:/ { printf "%.0f\n", $2/1024 }' /proc/meminfo
+    return
+  fi
+  echo ""
+}
+ragnar_probe_device_model() {
+  local m="unknown"
+  if [[ -r /proc/device-tree/model ]]; then
+    m=$(tr -d '\0' </proc/device-tree/model)
+  elif [[ -r /sys/firmware/devicetree/base/model ]]; then
+    m=$(tr -d '\0' </sys/firmware/devicetree/base/model)
+  fi
+  printf '%s\n' "$m"
+}
+ragnar_config_read_gpu_mem() {
+  local f="$1"
+  [[ -f "$f" ]] || { echo ""; return; }
+  grep -E '^[[:space:]]*gpu_mem=' "$f" 2>/dev/null | head -1 | sed -n 's/^[[:space:]]*gpu_mem=\([0-9]*\).*/\1/p'
+}
+ragnar_gpu_mem_clamp_for_ram() {
+  local want="$1" ram_mb="$2"
+  local min_g=16 max_g=256
+  [[ "$want" =~ ^[0-9]+$ ]] || want=$min_g
+  if [[ -z "$ram_mb" || ! "$ram_mb" =~ ^[0-9]+$ ]] || [[ "$ram_mb" -lt 128 ]]; then
+    ram_mb=1024
+  fi
+  local cap=$((ram_mb / 4))
+  [[ "$cap" -gt "$max_g" ]] && cap=$max_g
+  [[ "$cap" -lt "$min_g" ]] && cap=$min_g
+  [[ "$want" -lt "$min_g" ]] && want=$min_g
+  [[ "$want" -gt "$cap" ]] && want=$cap
+  echo "$want"
+}
+ragnar_gpu_mem_default_recommended() {
+  local ram_mb="$1" mode="${2:-epd}"
+  local gm=64
+  if [[ -z "$ram_mb" || ! "$ram_mb" =~ ^[0-9]+$ ]]; then
+    ram_mb=1024
+  fi
+  case "$mode" in
+    displayhatmini)
+      if [[ "$ram_mb" -le 512 ]]; then gm=64
+      elif [[ "$ram_mb" -le 1024 ]]; then gm=96
+      elif [[ "$ram_mb" -le 2048 ]]; then gm=128
+      else gm=160
+      fi
+      ;;
+    headless)
+      gm=16
+      [[ "$ram_mb" -gt 512 ]] && gm=32
+      ;;
+    *)
+      gm=32
+      [[ "$ram_mb" -gt 512 ]] && gm=48
+      ;;
+  esac
+  ragnar_gpu_mem_clamp_for_ram "$gm" "$ram_mb"
+}
+ragnar_validate_gpu_mem_sanity() {
+  local gm="$1" ram_mb="$2"
+  [[ "$gm" =~ ^[0-9]+$ ]] || return 1
+  if [[ "$gm" -lt 16 ]] || [[ "$gm" -gt 256 ]]; then
+    return 1
+  fi
+  if [[ -n "$ram_mb" && "$ram_mb" =~ ^[0-9]+$ ]]; then
+    local cap=$((ram_mb / 4))
+    [[ "$cap" -gt 256 ]] && cap=256
+    [[ "$gm" -gt "$cap" ]] && return 1
+  fi
+  return 0
+}
+ragnar_config_strip_gpu_mem() {
+  local f
+  for f in "$@"; do
+    [[ -f "$f" ]] || continue
+    sed -i '/^[[:space:]]*gpu_mem=/d' "$f"
+  done
+}
+ragnar_config_append_line() {
+  local line="$1" file="$2"
+  [[ -f "$file" ]] || return 1
+  grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >>"$file"
+}
+ragnar_apply_gpu_mem_production() {
+  local primary="${1:-/boot/firmware/config.txt}"
+  local mode="${2:-epd}"
+  local mirror="/boot/config.txt"
+  local ram_mb model old_pri old_mir snap_pri snap_mir gm="" err=0
+  ram_mb=$(ragnar_probe_mem_total_mb)
+  model=$(ragnar_probe_device_model)
+  ragnar_installer_log "start model='${model}' ram_mb=${ram_mb:-unknown} display_mode=$mode RAGNAR_INSTALLER_GPU_MEM=${RAGNAR_INSTALLER_GPU_MEM:-<unset>}"
+  old_pri=$(ragnar_config_read_gpu_mem "$primary")
+  [[ -f "$mirror" ]] && old_mir=$(ragnar_config_read_gpu_mem "$mirror")
+  snap_pri="${primary}.ragnar.gpu-snap"
+  snap_mir="${mirror}.ragnar.gpu-snap"
+  [[ -f "$primary" ]] && cp -a "$primary" "$snap_pri"
+  [[ -f "$mirror" ]] && cp -a "$mirror" "$snap_mir"
+  ragnar_gpu_mem_restore_snap() {
+    [[ -f "$snap_pri" ]] && cp -a "$snap_pri" "$primary"
+    [[ -f "$mirror" ]] && [[ -f "$snap_mir" ]] && cp -a "$snap_mir" "$mirror"
+    ragnar_installer_log "RECOVERED config from .ragnar.gpu-snap (gpu_mem validation failed)"
+  }
+  if [[ -n "${RAGNAR_INSTALLER_GPU_MEM:-}" ]]; then
+    case "${RAGNAR_INSTALLER_GPU_MEM}" in
+      skip|none|SKIP|NONE)
+        ragnar_config_strip_gpu_mem "$primary" "$mirror"
+        ragnar_installer_log "user skip: removed gpu_mem (was primary=${old_pri:-none})"
+        rm -f "$snap_pri" "$snap_mir" 2>/dev/null || true
+        return 0
+        ;;
+      min|MIN) gm=16 ;;
+    esac
+    if [[ -z "$gm" && "${RAGNAR_INSTALLER_GPU_MEM}" =~ ^[0-9]+$ ]]; then
+      gm="$RAGNAR_INSTALLER_GPU_MEM"
+    elif [[ -z "$gm" ]]; then
+      ragnar_installer_log "invalid RAGNAR_INSTALLER_GPU_MEM — falling back to recommended"
+      gm=""
+    fi
+  fi
+  [[ -z "$gm" ]] && gm=$(ragnar_gpu_mem_default_recommended "$ram_mb" "$mode")
+  gm=$(ragnar_gpu_mem_clamp_for_ram "$gm" "$ram_mb")
+  if ! ragnar_validate_gpu_mem_sanity "$gm" "$ram_mb"; then
+    ragnar_installer_log "sanity failed gm=$gm ram=$ram_mb — re-clamp"
+    gm=$(ragnar_gpu_mem_clamp_for_ram 16 "$ram_mb")
+  fi
+  ragnar_config_strip_gpu_mem "$primary" "$mirror"
+  ragnar_config_append_line "gpu_mem=${gm}" "$primary"
+  [[ -f "$mirror" && "$primary" != "$mirror" ]] && ragnar_config_append_line "gpu_mem=${gm}" "$mirror"
+  if ! ragnar_validate_config_txt "$primary" 2>/dev/null; then
+    err=1
+  elif [[ -f "$mirror" ]] && ! ragnar_validate_config_txt "$mirror" 2>/dev/null; then
+    err=1
+  elif ! ragnar_validate_gpu_mem_sanity "$gm" "$ram_mb"; then
+    err=1
+  fi
+  if [[ "$err" -ne 0 ]]; then
+    ragnar_gpu_mem_restore_snap
+    rm -f "$snap_pri" "$snap_mir" 2>/dev/null || true
+    ragnar_installer_log "ERROR: validation failed; restored snapshot"
+    return 1
+  fi
+  rm -f "$snap_pri" "$snap_mir" 2>/dev/null || true
+  ragnar_installer_log "ok gpu_mem=${gm} (previous=${old_pri:-none})"
+  return 0
+}
 BOOT_VALIDATE_INC
 fi
+
+# Use the active firmware directory (Bookworm: /boot/firmware; some images: /boot only).
+# Avoids writing only to /boot/firmware when the live config lives under /boot.
+if declare -F ragnar_boot_firmware_dir >/dev/null 2>&1; then
+  _RAGNAR_FW="$(ragnar_boot_firmware_dir)"
+  CONFIG_TXT="${_RAGNAR_FW}/config.txt"
+  CMDLINE_TXT="${_RAGNAR_FW}/cmdline.txt"
+  unset _RAGNAR_FW
+fi
+
+touch "${RAGNAR_INSTALLER_LOG:-/var/log/ragnar-installer.log}" 2>/dev/null || true
+if declare -F ragnar_install_log >/dev/null 2>&1; then
+  ragnar_install_log "start CONFIG_TXT=${CONFIG_TXT} CMDLINE_TXT=${CMDLINE_TXT}"
+fi
+
+if declare -F ragnar_installer_require_boot_files >/dev/null 2>&1; then
+  ragnar_installer_require_boot_files || {
+    echo "This installer must run on Raspberry Pi OS with a populated /boot partition." >&2
+    exit 1
+  }
+fi
+
+ragnar_installer_err_trap() {
+  local ec=$?
+  sync 2>/dev/null || true
+  if declare -F ragnar_install_log >/dev/null 2>&1; then
+    ragnar_install_log "FATAL exit=${ec} (ERR trap) — if boot broke: cp -a ${CONFIG_TXT}.ragnar.bak ${CONFIG_TXT}"
+  fi
+  echo "FATAL: installer failed (exit ${ec}). Boot backups: ${CONFIG_TXT}.ragnar.bak ${CMDLINE_TXT}.ragnar.bak" >&2
+}
+trap ragnar_installer_err_trap ERR
 
 append_if_missing() {
   local line="$1"
   local file="$2"
-  grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
+  if declare -F ragnar_config_append_line_if_missing_safe >/dev/null 2>&1; then
+    ragnar_config_append_line_if_missing_safe "$line" "$file"
+  else
+    [[ -f "$file" ]] || return 0
+    grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >>"$file"
+  fi
 }
 
 ensure_user() {
@@ -1138,7 +1370,8 @@ ragnar_boot_backup
 sed -i '/^[[:space:]]*dtparam=act_led_trigger=none/d' "$CONFIG_TXT" 2>/dev/null || true
 [ -f /boot/config.txt ] && sed -i '/^[[:space:]]*dtparam=act_led_trigger=none/d' /boot/config.txt 2>/dev/null || true
 append_if_missing "dtparam=spi=on" "$CONFIG_TXT"
-append_if_missing "gpu_mem=128" "$CONFIG_TXT"
+# gpu_mem: applied after select_display (below). Older installer always set gpu_mem=128 here, which
+# starves 512MB boards (e.g. Pi Zero 2 W) and can cause boot hangs / solid ACT — see TROUBLESHOOTING.md.
 if [[ "${RAGNAR_INSTALLER_PERF_TUNING:-0}" == "1" ]]; then
   append_if_missing "core_freq=500" "$CONFIG_TXT"
   append_if_missing "core_freq_min=500" "$CONFIG_TXT"
@@ -1151,11 +1384,22 @@ fi
 if command -v ragnar_cmdline_append_if_missing >/dev/null 2>&1; then
   ragnar_cmdline_append_if_missing "consoleblank=0" || true
 fi
-[[ "${RAGNAR_INSTALLER_PERF_TUNING:-0}" == "1" ]] && { [ -f /boot/config.txt ] && append_if_missing "gpu_mem=128" "/boot/config.txt" || true; }
 
 select_display
 ask_optional_features
 configure_static_ip
+
+# GPU memory split (must run after DISPLAY_MODE is known)
+# Production: RAM + model probe, mode tables, caps, journal log, snapshot recovery
+# See Ragnar/scripts/boot_validate.inc — ragnar_apply_gpu_mem_production
+echo "Applying GPU memory split (production: probe, caps, logging, recovery)..."
+if declare -F ragnar_apply_gpu_mem_production >/dev/null 2>&1; then
+  if ! ragnar_apply_gpu_mem_production "$CONFIG_TXT" "${DISPLAY_MODE:-epd}"; then
+    echo "WARNING: gpu_mem step failed validation (configs restored from pre-step snapshot). See ${RAGNAR_INSTALLER_LOG:-/var/log/ragnar-installer.log}" >&2
+  fi
+else
+  echo "WARNING: ragnar_apply_gpu_mem_production not defined — copy Ragnar/scripts/boot_validate.inc from the repo or use the full installer bundle; skipping gpu_mem." >&2
+fi
 
 echo "Validating boot files after firmware/network changes..."
 if ! ragnar_validate_boot_after_install; then
@@ -1166,12 +1410,31 @@ if ! ragnar_validate_boot_after_install; then
   exit 1
 fi
 
+if declare -F ragnar_boot_partition_sync >/dev/null 2>&1; then
+  ragnar_boot_partition_sync
+fi
+if declare -F ragnar_install_log >/dev/null 2>&1; then
+  ragnar_install_log "boot validation OK; boot partition synced"
+fi
+
 echo "Preparing Ragnar directory..."
 ensure_user
 mkdir -p "$HOME_DIR"
 chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
 
 cd "$HOME_DIR"
+if [[ "${RAGNAR_INSTALLER_BACKUP_APP:-0}" == "1" ]] && [[ -d "$RAGNAR_DIR" ]]; then
+  _bak="/var/backups/ragnar-app-$(date +%Y%m%d_%H%M%S).tar.gz"
+  if mkdir -p /var/backups 2>/dev/null; then
+    if tar -C "$(dirname "$RAGNAR_DIR")" -czf "$_bak" "$(basename "$RAGNAR_DIR")" 2>/dev/null; then
+      echo "Backed up existing app tree to $_bak"
+      if declare -F ragnar_install_log >/dev/null 2>&1; then
+        ragnar_install_log "app backup $_bak"
+      fi
+    fi
+  fi
+  unset _bak
+fi
 rm -rf "$RAGNAR_DIR" || true
 
 if [ -d "$INSTALLER_DIR/Ragnar" ] && [ -f "$INSTALLER_DIR/Ragnar/Ragnar.py" ]; then
@@ -2125,6 +2388,11 @@ show_network_info
 echo ""
 echo "Final config check:"
 grep -n '"epd_type"\|"ref_width"\|"ref_height"' "$RAGNAR_DIR/config/shared_config.json" || true
+
+trap - ERR
+if declare -F ragnar_install_log >/dev/null 2>&1; then
+  ragnar_install_log "INSTALL COMPLETE OK"
+fi
 
 echo ""
 echo "========================================"
