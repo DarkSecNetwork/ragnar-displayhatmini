@@ -1695,9 +1695,14 @@ fi
 # Boot splash for Display HAT Mini: copy from repo bundle (button test + boot log)
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   mkdir -p "$RAGNAR_DIR/scripts"
-  if [ -f "$INSTALLER_DIR/Ragnar/scripts/display_boot_splash.py" ]; then
-    cp -a "$INSTALLER_DIR/Ragnar/scripts/display_boot_splash.py" "$RAGNAR_DIR/scripts/"
-    chmod +x "$RAGNAR_DIR/scripts/display_boot_splash.py"
+  SPLASH_SRC="$INSTALLER_DIR/Ragnar/scripts/display_boot_splash.py"
+  SPLASH_DST="$RAGNAR_DIR/scripts/display_boot_splash.py"
+  if [ -f "$SPLASH_SRC" ]; then
+    # cp fails with "same file" when installer runs from ~/Ragnar (INSTALLER_DIR == HOME/repo); set -e would abort.
+    if [ ! "$SPLASH_SRC" -ef "$SPLASH_DST" ]; then
+      cp -a "$SPLASH_SRC" "$SPLASH_DST"
+    fi
+    chmod +x "$SPLASH_DST" 2>/dev/null || true
   else
     echo "WARNING: Ragnar/scripts/display_boot_splash.py missing from installer bundle" >&2
   fi
