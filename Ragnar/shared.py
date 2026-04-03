@@ -86,7 +86,9 @@ def resolve_epd_type(size_key, current_epd_type=None):
 
 DISPLAY_PROFILES = {
     # Pimoroni Display HAT Mini (ST7789); installer may set 320x240 landscape — override via config/ref_*
-    "displayhatmini": {"ref_width": 240, "ref_height": 320, "default_flip": False},
+    # Use design resolution for ref_* so scale factors match display.py (122×250 coords).
+    # Physical panel size still comes from EPD driver (self.width/height after init).
+    "displayhatmini": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in13":    {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in7":     {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in7_V2":  {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
@@ -964,8 +966,15 @@ class SharedData:
         self.ragnarorch_status = "IDLE"
         self.ragnarstatustext = "IDLE"
         self.ragnarstatustext2 = "Awakening..."
-        self.scale_factor_x = self.width / self.config['ref_width']
-        self.scale_factor_y = self.height / self.config['ref_height']
+        # displayhatmini: shared_config may still store physical pixels (240×320) from older installers;
+        # main UI in display.py is authored in the same 122×250 space as epd2in13 — scale from design ref.
+        _epd = self.config.get("epd_type") or DEFAULT_EPD_TYPE
+        if _epd == "displayhatmini":
+            self.scale_factor_x = self.width / float(DESIGN_REF_WIDTH)
+            self.scale_factor_y = self.height / float(DESIGN_REF_HEIGHT)
+        else:
+            self.scale_factor_x = self.width / self.config["ref_width"]
+            self.scale_factor_y = self.height / self.config["ref_height"]
         self.text_frame_top = int(88 * self.scale_factor_y)
         self.text_frame_bottom = int(159 * self.scale_factor_y)
         self.y_text = self.text_frame_top + 2

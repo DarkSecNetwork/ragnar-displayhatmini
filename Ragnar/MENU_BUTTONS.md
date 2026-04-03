@@ -15,7 +15,7 @@ This document describes how the on-device settings menu works for **Pimoroni Dis
 
 | Button | GPIO | Action |
 |--------|------|--------|
-| **A** | 5 | Toggle settings menu (open / close) |
+| **A** | 5 | **Classic UI:** toggle settings menu. **State UI** (`RAGNAR_DHM_UI_MODE=state`): on **HOME** face, **A** and **B** both open the root menu; in **MENU**, **A** scrolls up (see `dhm_ui_state._HOME_OPEN_MENU_LOGICALS`). |
 | **B** | 6 | **Short press:** Select (toggle or action). **Long press (~0.6 s):** Back (close menu). **Double-tap** (within ~0.4 s): Back |
 | **X** | 16 | Move highlight **up** (menu open) |
 | **Y** | 24 | Move highlight **down** (menu open) |
@@ -37,6 +37,8 @@ On boot, if PiSugar is enabled but TCP fails, Ragnar tries only **`RAGNAR_PISUGA
 | `RAGNAR_SKIP_DHM_BUTTONS=1` | Do not attach gpiozero buttons. Use to debug a blank display or GPIO conflicts; the main UI still runs. |
 | `RAGNAR_DHM_BUTTON_DELAY` | Seconds to wait after process start before attaching buttons (default **1.0**). Lets SPI/display init finish first; increase if you see rare races. Set `0` for immediate attach. |
 | `RAGNAR_DHM_LOG_EVENTS` | Set to `1` to log each queued button event (`menu_toggle`, `up`, …) to the Ragnar log for debugging. |
+| `RAGNAR_DHM_LOG_TRANSITIONS` | Default **on**: logs one line when **HOME → MENU** (`DHM: HOME → MENU (logical=…)`). Set to `0` / `false` to disable. |
+| `RAGNAR_DHM_TRACE_INPUT` | Set to `1` to log **debug** lines `state=` + `logical=` on every state-machine input (noisy). |
 | `RAGNAR_GPIOZERO_FACTORY` | Pin backend for gpiozero: **`lgpio`** (default via service on Bookworm), `native`, or `rpigpio`. The panel driver uses **gpiodevice**; menu buttons need **lgpio** + `python3-lgpio` so presses are seen reliably. |
 
 Example for `ragnar.service` under `[Service]`:
@@ -71,6 +73,16 @@ Environment=RAGNAR_DHM_BUTTON_DELAY=3
 - **Toggles:** **B** cycles the configured option and calls `shared_data.save_config()` when applicable (e.g. invert colors updates `screen_reversed`).  
 - **Text rows** (e.g. WiFi password): shown masked; **B** does not open an editor on-device (extend in code if needed).  
 - **Actions** (restart, shutdown, clear logs, etc.): run via background threads / `subprocess`; see `apply_select()` in `displayhatmini_menu.py`.
+
+## Regression tests (HOME / menu)
+
+Run on the Pi or dev machine from the `Ragnar/` directory:
+
+```bash
+python3 -m unittest tests.test_dhm_state_home_menu -v
+```
+
+This guards **Button A + B open menu from HOME** and **Button A scrolls in MENU**.
 
 ## Troubleshooting
 

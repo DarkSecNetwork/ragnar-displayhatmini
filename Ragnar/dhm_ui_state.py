@@ -31,6 +31,11 @@ L_DOWN = "DOWN"
 L_SELECT = "SELECT"
 L_BACK = "BACK"
 
+# REGRESSION GUARD (tests/test_dhm_state_home_menu.py):
+# STATE_HOME must treat both L_UP (Button A / EVENT_MENU_TOGGLE) and L_SELECT (Button B) as
+# "open root menu". Do not remove L_UP without updating docs, tests, and map_hardware_event_to_logical.
+_HOME_OPEN_MENU_LOGICALS = (L_SELECT, L_UP)
+
 SCROLL_LERP = 0.22
 LINE_HEIGHT = 16
 # Legacy default; real root menu row height comes from dhm_menu_icons.dhm_root_menu_layout(width, height).
@@ -116,6 +121,14 @@ def dhm_state_ui_enabled() -> bool:
 
 
 def map_hardware_event_to_logical(ev: str) -> Optional[str]:
+    """Map raw DHM queue events to logical roles (L_UP / L_DOWN / L_SELECT / L_BACK).
+
+    Hardware (Pimoroni): A→EVENT_MENU_TOGGLE, B→SELECT/BACK, X→UP, Y→DOWN.
+
+    Logical meanings are **state-dependent** (see ``handle_dhm_state_event``). Example: ``L_UP``
+    scrolls the root list in ``STATE_MENU`` but opens the menu from ``STATE_HOME`` together
+    with ``L_SELECT`` — keep HOME/MENU behavior in one place, not in this table.
+    """
     from displayhatmini_buttons import (
         EVENT_MENU_TOGGLE,
         EVENT_UP,
@@ -729,6 +742,8 @@ def handle_dhm_state_event(display, logical: str, apply_select_fn: Callable) -> 
     ui.touch_input()
 
     state = ui.state
+    if os.environ.get("RAGNAR_DHM_TRACE_INPUT", "").strip().lower() in ("1", "true", "yes", "on"):
+        logger.debug("DHM input state=%s logical=%s", state, logical)
 
     if state == STATE_HOTSPOT_QR:
         if logical in (L_BACK, L_SELECT):
@@ -761,12 +776,23 @@ def handle_dhm_state_event(display, logical: str, apply_select_fn: Callable) -> 
     n_root = len(ROOT_MENU_SPEC)
 
     if state == STATE_HOME:
-        if logical == L_SELECT:
+        # L_SELECT = Button B. L_UP = Button A (EVENT_MENU_TOGGLE) — both open root menu from home face.
+        if logical in _HOME_OPEN_MENU_LOGICALS:
             display.menu_visible = True
             ui.state = STATE_MENU
             ui.root_index = 0
             ui.scroll_offset = 0.0
             ui.scroll_target = 0.0
+            # One high-signal line per open (low frequency). Set RAGNAR_DHM_LOG_TRANSITIONS=0 to disable.
+            if os.environ.get("RAGNAR_DHM_LOG_TRANSITIONS", "1").strip().lower() not in (
+                "0",
+                "false",
+                "no",
+                "off",
+            ):
+                logger.info("DHM: HOME → MENU (logical=%s)", logical)
+            if __debug__:
+                assert ui.state == STATE_MENU and display.menu_visible, "HOME→MENU invariant"
         return
 
     if state == STATE_MENU:

@@ -815,8 +815,9 @@ if shared_py.exists():
     text = re.sub(r'"ref_height"\s*:\s*\d+', f'"ref_height": {height}', text, count=1)
     
     if mode == "displayhatmini":
-        # Add or update displayhatmini in DISPLAY_PROFILES with chosen orientation (portrait 240x320 or landscape 320x240)
-        dhat_entry = f'"displayhatmini": {{"ref_width": {width}, "ref_height": {height}, "default_flip": False}}'
+        # Layout in display.py uses 122×250 design coords (same as epd2in13). ref_* here = design space;
+        # physical pixels come from the LCD driver (self.width/height). Do not use panel WxH or scaling breaks.
+        dhat_entry = '"displayhatmini": {"ref_width": 122, "ref_height": 250, "default_flip": False}'
         if '"displayhatmini"' in text:
             # Update existing entry to current width/height (portrait vs landscape)
             text = re.sub(

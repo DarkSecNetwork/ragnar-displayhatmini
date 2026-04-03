@@ -1967,7 +1967,17 @@ class Display:
                     _pisugar_available = _ps and _ps.available
                 except Exception:
                     pass
+                _dhm_main = self.shared_data.config.get("epd_type") == "displayhatmini"
                 if _pisugar_available:
+                    _title_font = self.shared_data.font_viking_sm
+                else:
+                    _title_font = self.shared_data.font_viking
+                if _dhm_main:
+                    _title = "RAGNAR"
+                    _tb = draw.textbbox((0, 0), _title, font=_title_font)
+                    _tw = _tb[2] - _tb[0]
+                    draw.text(((W - _tw) // 2, int(5 * sy)), _title, font=_title_font, fill=0)
+                elif _pisugar_available:
                     draw.text((int(40 * sx), int(6 * sy)), "RAGNAR", font=self.shared_data.font_viking_sm, fill=0)
                 else:
                     draw.text((int(37 * sx), int(5 * sy)), "RAGNAR", font=self.shared_data.font_viking, fill=0)
