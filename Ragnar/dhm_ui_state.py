@@ -33,7 +33,8 @@ L_BACK = "BACK"
 
 SCROLL_LERP = 0.22
 LINE_HEIGHT = 16
-ROOT_MENU_ROW_HEIGHT = 40  # icon row height for state UI root menu (32px icon + padding)
+# Legacy default; real root menu row height comes from dhm_menu_icons.dhm_root_menu_layout(width, height).
+ROOT_MENU_ROW_HEIGHT = 40
 IDLE_DIM_SEC = 30.0
 HOTSPOT_IDLE_DEFAULT_SEC = 180.0
 HOTSPOT_QR_IDLE_DEFAULT_SEC = 120.0

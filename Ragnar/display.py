@@ -876,8 +876,14 @@ class Display:
     def _render_dhm_root_menu(self, image, draw):
         """State UI: root menu — 32px icons, 40px rows, bold type, inverted selection, icon bounce."""
         try:
-            from dhm_ui_state import ROOT_MENU_SPEC, ROOT_MENU_ROW_HEIGHT
-            from dhm_menu_icons import ICON_SIZE_DEFAULT, invert_icon_1bit, load_menu_icon
+            from dhm_ui_state import ROOT_MENU_SPEC
+            from dhm_menu_icons import (
+                dhm_menu_right_reserved_px,
+                dhm_root_menu_layout,
+                fit_text_to_width,
+                invert_icon_1bit,
+                load_menu_icon,
+            )
         except ImportError:
             return
         if not self.dhm_ui or not ROOT_MENU_SPEC:
@@ -885,23 +891,29 @@ class Display:
         W = self.shared_data.width
         H = self.shared_data.height
         ui = self.dhm_ui
-        row_h = ROOT_MENU_ROW_HEIGHT
-        icon_w = ICON_SIZE_DEFAULT
-        title_h = 22
+        icon_w, row_h, title_h = dhm_root_menu_layout(W, H)
         text_x = 4 + icon_w + 6
+        ur = self._get_dhm_ui_renderer()
+        wifi_sc = ur.wifi_icon_scale if ur is not None else (2 if W <= 200 else 1)
+        reserved = dhm_menu_right_reserved_px(W, wifi_sc)
         idx = max(0, min(ui.root_index, len(ROOT_MENU_SPEC) - 1))
         ui.root_index = idx
+        title_sz = max(14, min(18, title_h + 2))
+        row_sz = max(11, min(16, row_h - 5))
         try:
             font_title = ImageDraw.ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", title_sz
             )
             font_row = ImageDraw.ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", row_sz
             )
         except Exception:
             font_title = font_row = ImageDraw.ImageFont.load_default()
         draw.rectangle((0, 0, W - 1, H - 1), fill=255)
-        draw.text((4, 2), "Menu", fill=0, font=font_title)
+        title_line = fit_text_to_width(
+            draw, font_title, "Menu", float(max(16, W - 4 - reserved - 2))
+        )
+        draw.text((4, 2), title_line, fill=0, font=font_title)
         off = int(ui.scroll_offset)
         base_y = 2 + title_h
         bounce = lambda sel: int(math.sin(time.time() * 10.0) * 2.0) if sel else 0
@@ -909,7 +921,12 @@ class Display:
             y = base_y + i * row_h - off
             if y < -row_h or y > H - 2:
                 continue
-            label = spec["label"][: max(1, (W - text_x - 4) // 9)]
+            label = fit_text_to_width(
+                draw,
+                font_row,
+                spec["label"],
+                float(max(12, W - reserved - text_x - 2)),
+            )
             icn_name = spec.get("icon") or "wifi"
             highlight = i == idx
             row_top = max(0, y)
@@ -922,7 +939,7 @@ class Display:
             iy = row_top + (row_h - icon_w) // 2 + bounce(highlight)
             iy = max(row_top, min(iy, row_bot - icon_w))
             image.paste(icn, (4, iy))
-            ty = row_top + (row_h - 15) // 2
+            ty = row_top + max(0, (row_h - row_sz) // 2)
             fill = 255 if highlight else 0
             draw.text((text_x, ty), label, font=font_row, fill=fill)
 
@@ -1853,12 +1870,8 @@ class Display:
                         self._render_health_panel(image, draw)
                     elif self.menu_visible:
                         if self._dhm_state_ui and self.dhm_ui:
-                            from dhm_ui_state import (
-                                ROOT_MENU_ROW_HEIGHT,
-                                ROOT_MENU_SPEC,
-                                update_dhm_scroll,
-                                update_wifi_list_scroll,
-                            )
+                            from dhm_menu_icons import dhm_root_menu_layout
+                            from dhm_ui_state import ROOT_MENU_SPEC, update_dhm_scroll, update_wifi_list_scroll
 
                             st = self.dhm_ui.state
                             if st == STATE_HOTSPOT or st == STATE_HOTSPOT_QR:
@@ -1875,8 +1888,11 @@ class Display:
                             elif st == STATE_SETTINGS:
                                 self._render_dhm_wifi_settings(image, draw)
                             else:
+                                _, menu_row_h, _ = dhm_root_menu_layout(
+                                    self.shared_data.width, self.shared_data.height
+                                )
                                 update_dhm_scroll(
-                                    self.dhm_ui, len(ROOT_MENU_SPEC), row_height=ROOT_MENU_ROW_HEIGHT
+                                    self.dhm_ui, len(ROOT_MENU_SPEC), row_height=float(menu_row_h)
                                 )
                                 self._render_dhm_root_menu(image, draw)
                         else:

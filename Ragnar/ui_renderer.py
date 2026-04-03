@@ -201,9 +201,6 @@ class UIRenderer:
         self.display = display
         self.menu_items = menu_items if menu_items is not None else _default_menu_items()
         self.icon_path = icon_dir if icon_dir is not None else default_icon_dir()
-        self.font_title = _resolve_font(font_title_size)
-        self.font_row = _resolve_font(font_row_size)
-        self.font_wifi = _resolve_font(font_wifi_size)
         self.show_menu_wifi_footer = show_menu_wifi_footer
         self.wifi_iface = os.environ.get("RAGNAR_WIFI_IFACE", "wlan0").strip() or "wlan0"
         self._auto_hotspot_suggested = False
@@ -221,6 +218,22 @@ class UIRenderer:
         self.menu_index = 0
         self.scroll_offset = 0.0
         self._icon_cache: Dict[Tuple[str, int, int], Image.Image] = {}
+        try:
+            from dhm_menu_icons import dhm_root_menu_layout
+
+            mic, mrh, mth = dhm_root_menu_layout(width, height)
+        except ImportError:
+            mic, mrh, mth = ICON_SIZE, ROW_HEIGHT, TITLE_H
+        self.menu_icon_size = mic
+        self.menu_row_height = mrh
+        self.menu_title_h = mth
+        self.menu_text_x = ICON_PAD_X + mic + 6
+        title_px = max(font_title_size, min(18, max(13, mth + 2)))
+        row_px = max(font_row_size, min(16, max(11, mrh - 6)))
+        self.menu_row_font_px = row_px
+        self.font_title = _resolve_font(title_px)
+        self.font_row = _resolve_font(row_px)
+        self.font_wifi = _resolve_font(font_wifi_size)
 
         # Animation / screen state
         self.icon_bounce_offset = 0.0
@@ -451,6 +464,15 @@ class UIRenderer:
         """
         del img, step
 
+    def menu_status_reserved_right(self) -> int:
+        """Pixels to leave clear on the right edge (matches :meth:`_draw_status_icons_menu`)."""
+        try:
+            from dhm_menu_icons import dhm_menu_right_reserved_px
+
+            return dhm_menu_right_reserved_px(self.width, self.wifi_icon_scale)
+        except ImportError:
+            return 52
+
     def _draw_status_icons_menu(self, draw: ImageDraw.ImageDraw) -> None:
         """Wi‑Fi + BT + optional battery, top-right on white menu (black ink)."""
         sc = self.wifi_icon_scale
@@ -587,7 +609,9 @@ class UIRenderer:
             self._hotspot_start_time = None
             self.start_screen_transition("menu")
 
-    def load_icon(self, name: str, size: Tuple[int, int] = (ICON_SIZE, ICON_SIZE)) -> Image.Image:
+    def load_icon(self, name: str, size: Optional[Tuple[int, int]] = None) -> Image.Image:
+        if size is None:
+            size = (self.menu_icon_size, self.menu_icon_size)
         key = (name, size[0], size[1])
         if key in self._icon_cache:
             return self._icon_cache[key]
@@ -629,7 +653,7 @@ class UIRenderer:
     def update_scroll(self) -> None:
         """Ease scroll_offset toward menu_index × row height (slide animation)."""
         n = max(1, len(self.menu_items))
-        target = float(max(0, min(self.menu_index, n - 1)) * ROW_HEIGHT)
+        target = float(max(0, min(self.menu_index, n - 1)) * self.menu_row_height)
         diff = target - self.scroll_offset
         self.scroll_offset += diff * SCROLL_EASE
         if abs(diff) < 0.45:
@@ -723,26 +747,47 @@ class UIRenderer:
         img = Image.new("1", (self.width, self.height), 255)
         draw = ImageDraw.Draw(img)
         draw.rectangle((0, 0, self.width - 1, self.height - 1), fill=255)
-        draw.text((4, 2), "Menu", fill=0, font=self.font_title)
+        reserved = self.menu_status_reserved_right()
+        try:
+            from dhm_menu_icons import fit_text_to_width
+
+            title_txt = fit_text_to_width(
+                draw,
+                self.font_title,
+                "Menu",
+                float(max(24, self.width - 4 - reserved - 2)),
+            )
+        except ImportError:
+            title_txt = "Menu"
+        draw.text((4, 2), title_txt, fill=0, font=self.font_title)
         self._draw_status_icons_menu(draw)
 
         off = int(self.scroll_offset)
-        base_y = 2 + TITLE_H
+        base_y = 2 + self.menu_title_h
         idx = max(0, min(self.menu_index, len(self.menu_items) - 1))
         menu_bottom = self.height - (MENU_WIFI_FOOTER_H if self.show_menu_wifi_footer else 0)
+        rh = self.menu_row_height
+        ic_sz = self.menu_icon_size
+        label_max_w = float(max(20, self.width - reserved - self.menu_text_x - 2))
 
         for i, item in enumerate(self.menu_items):
-            y = base_y + i * ROW_HEIGHT - off
-            if y < -ROW_HEIGHT or y > menu_bottom - 2:
+            y = base_y + i * rh - off
+            if y < -rh or y > menu_bottom - 2:
                 continue
             selected = i == idx
             row_top = max(0, y)
-            row_bot = min(menu_bottom - 1, y + ROW_HEIGHT - 1)
+            row_bot = min(menu_bottom - 1, y + rh - 1)
             label = item["label"]
+            try:
+                from dhm_menu_icons import fit_text_to_width
+
+                label = fit_text_to_width(draw, self.font_row, label, label_max_w)
+            except ImportError:
+                label = label[:42]
             if selected:
                 draw.rectangle((0, row_top, self.width - 1, row_bot), fill=0)
 
-            icn = self.load_icon(item["icon"], (ICON_SIZE, ICON_SIZE))
+            icn = self.load_icon(item["icon"], (ic_sz, ic_sz))
             if selected:
                 try:
                     from dhm_menu_icons import invert_icon_1bit
@@ -752,15 +797,16 @@ class UIRenderer:
                     icn = icn.convert("L").point(lambda x: 255 - x).point(
                         lambda x: 0 if x < 128 else 255, mode="1"
                     )
-            iy = row_top + (ROW_HEIGHT - ICON_SIZE) // 2
+            iy = row_top + (rh - ic_sz) // 2
             if selected and apply_bounce:
                 iy += int(self.icon_bounce_offset)
-            iy = max(row_top, min(iy, row_bot - ICON_SIZE))
+            iy = max(row_top, min(iy, row_bot - ic_sz))
             img.paste(icn, (ICON_PAD_X, iy))
 
-            ty = row_top + (ROW_HEIGHT - 15) // 2
+            _rp = getattr(self, "menu_row_font_px", 15)
+            ty = row_top + max(0, (rh - _rp) // 2)
             fill = 255 if selected else 0
-            draw.text((TEXT_X, ty), label[:42], font=self.font_row, fill=fill)
+            draw.text((self.menu_text_x, ty), label, font=self.font_row, fill=fill)
 
         if self.show_menu_wifi_footer:
             self._draw_menu_wifi_footer(draw)
