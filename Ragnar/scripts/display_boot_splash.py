@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Display HAT Mini boot splash: Booting / Starting Ragnar / boot log / button test (press Select to continue)."""
+"""Display HAT Mini boot splash: boot log → network/IP → button map (press B/Select to continue). One SPI handoff."""
 import os
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 _R = Path(__file__).resolve().parent.parent
-if str(_R) not in sys.path:
-    sys.path.insert(0, str(_R))
+_SCRIPTS = Path(__file__).resolve().parent
+for _p in (_R, _SCRIPTS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 try:
     from display_text_util import compact_journal_line, ellipsis_fit_to_width
 except ImportError:
@@ -21,6 +22,31 @@ try:
     from displayhatmini_buttons import PIN_A, PIN_B, PIN_X, PIN_Y
 except ImportError:
     PIN_A, PIN_B, PIN_X, PIN_Y = 5, 6, 16, 24
+
+
+def _init_lgpio_at_startup() -> bool:
+    """Force LGPIO before display init / splash wait (reliable GPIO diagnostic)."""
+    try:
+        from gpiozero import Device
+        from gpiozero.pins.lgpio import LGPIOFactory
+
+        Device.pin_factory = LGPIOFactory()
+        print("display_boot_splash: LGPIO pin factory active", file=sys.stderr, flush=True)
+        return True
+    except Exception as e:
+        print(f"display_boot_splash: LGPIO primary init failed ({e}); trying fallback", file=sys.stderr, flush=True)
+    try:
+        from displayhatmini_buttons import _ensure_gpiozero_pin_factory
+
+        return _ensure_gpiozero_pin_factory()
+    except Exception as e2:
+        print(f"display_boot_splash: gpio pin factory unavailable: {e2}", file=sys.stderr, flush=True)
+        return False
+
+
+def _ensure_lgpio_factory() -> bool:
+    """Idempotent: prefer LGPIO; fall back to displayhatmini_buttons chain."""
+    return _init_lgpio_at_startup()
 
 
 def _get_boot_log_lines(max_lines=12):
@@ -44,70 +70,126 @@ def _get_boot_log_lines(max_lines=12):
     return lines[-max_lines:] if len(lines) > max_lines else lines
 
 
-def _ensure_lgpio_factory() -> bool:
-    """Prefer LGPIO (Bookworm); fall back to displayhatmini_buttons factory chain."""
+def _draw_network_screen(epd, Image, ImageDraw, w: int, h: int, font_title, font_small, bg, fg, accent):
+    """Show iface, IPv4, gateway, SSH listen (network_boot_facts)."""
+    lines = ["Network", "(no data)"]
     try:
-        from gpiozero import Device
-        from gpiozero.pins.lgpio import LGPIOFactory
+        from network_boot_facts import collect_network_facts
 
-        Device.pin_factory = LGPIOFactory()
-        return True
-    except Exception:
-        pass
-    try:
-        from displayhatmini_buttons import _ensure_gpiozero_pin_factory
+        nf = collect_network_facts()
+        lines = [
+            "Network",
+            f"IF {nf.interface}  IP {nf.ip_addr}",
+            f"GW {nf.gateway}  DNS {nf.dns[:28]}",
+            f"SSH {nf.ssh_status}",
+        ]
+    except Exception as e:
+        lines = ["Network", str(e)[:40]]
 
-        return _ensure_gpiozero_pin_factory()
-    except Exception:
-        return False
+    img = Image.new("RGB", (w, h), bg)
+    draw = ImageDraw.Draw(img)
+    y = 4
+    if font_title:
+        draw.text((4, y), lines[0], font=font_title, fill=accent)
+        y += 26
+    margin_x = 4
+    max_tw = max(40, w - 8)
+    lh = 13
+    for line in lines[1:]:
+        if y + lh > h - 2:
+            break
+        if font_small:
+            shown = (
+                ellipsis_fit_to_width(draw, line, font_small, max_tw)
+                if ellipsis_fit_to_width is not None
+                else line[:56]
+            )
+        else:
+            shown = line
+        draw.text((margin_x, y), shown, font=font_small, fill=fg)
+        y += lh
+    epd.display(img)
 
 
-def _draw_button_test_screen(
-    epd, Image, ImageDraw, w: int, h: int, font_title, font_small, bg, fg, accent
+def _draw_button_wait_ui(
+    epd,
+    Image,
+    ImageDraw,
+    w: int,
+    h: int,
+    font_title,
+    font_small,
+    bg,
+    fg,
+    accent,
+    *,
+    last_input: str,
+    debug: bool,
+    remaining_sec=None,
 ) -> None:
-    """Show GPIO mapping + instruction to press B (Select)."""
+    """Live splash: mapping + last key; debug adds wait hint and countdown feel."""
     img = Image.new("RGB", (w, h), bg)
     draw = ImageDraw.Draw(img)
     y = 4
     if font_title:
         draw.text((4, y), "Button test", font=font_title, fill=accent)
-        y += 28
-    lines = [
-        f"A (menu)   GPIO{PIN_A}",
-        f"B (Select) GPIO{PIN_B}  <- press",
-        f"X (up)     GPIO{PIN_X}",
-        f"Y (down)   GPIO{PIN_Y}",
-        "",
-        "Press B (Select) to continue",
-    ]
+        y += 26
     margin_x = 4
     max_tw = max(40, w - 8)
-    lh = 13
+    lh = 12
+    lines = [
+        f"A={PIN_A} B={PIN_B} X={PIN_X} Y={PIN_Y}",
+        "B = Select (continue)",
+    ]
     for line in lines:
         if y + lh > h - 2:
             break
-        if line and font_small:
-            shown = (
-                ellipsis_fit_to_width(draw, line, font_small, max_tw)
-                if ellipsis_fit_to_width is not None
-                else line[:60]
-            )
-        else:
-            shown = line or " "
+        shown = (
+            ellipsis_fit_to_width(draw, line, font_small, max_tw)
+            if font_small and ellipsis_fit_to_width is not None
+            else (line[:56] if line else "")
+        )
         draw.text((margin_x, y), shown, font=font_small, fill=fg)
         y += lh
+    y += 4
+    if debug:
+        draw.text((margin_x, y), "Waiting for button... (press A)", font=font_small, fill=(180, 220, 255))
+        y += lh
+        draw.text((margin_x, y), "Press B (Select) to continue", font=font_small, fill=(160, 200, 255))
+        y += lh
+    last_line = f"Last input: {last_input}"
+    draw.text((margin_x, y), last_line[:48], font=font_small, fill=(200, 200, 120))
+    y += lh
+    if debug and remaining_sec is not None:
+        draw.text((margin_x, y), f"Timeout in ~{int(max(0, remaining_sec))}s", font=font_small, fill=(150, 150, 150))
+    epd.display(img)
+
+
+def _draw_button_continue_screen(epd, Image, ImageDraw, w, h, font_title, font_small, bg, fg, accent):
+    img = Image.new("RGB", (w, h), bg)
+    draw = ImageDraw.Draw(img)
+    y = (h // 2) - 24
+    msg = "Button detected — continuing..."
+    if font_title:
+        shown = (
+            ellipsis_fit_to_width(draw, msg, font_title, max(40, w - 8))
+            if ellipsis_fit_to_width is not None
+            else msg[:24]
+        )
+        draw.text((4, y), shown, font=font_title, fill=accent)
+    elif font_small:
+        draw.text((4, y), msg[:40], font=font_small, fill=accent)
     epd.display(img)
 
 
 def _run_button_test(
     epd, Image, ImageDraw, w: int, h: int, font_title, font_small, bg, fg, accent
 ) -> None:
-    """
-    Wait for Select (B) via gpiozero + LGPIO; debounce 0.1s.
-    Main thread polls a threading.Event so the process stays responsive (no busy loop).
-    """
+    """Wait for Select (B); live UI + optional RAGNAR_SPLASH_DEBUG."""
+    splash_debug = os.environ.get("RAGNAR_SPLASH_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
     try:
-        delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "1.0"))
+        delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "0.25"))
     except ValueError:
         delay = 1.0
     delay = max(0.0, delay)
@@ -115,36 +197,46 @@ def _run_button_test(
         time.sleep(delay)
 
     if not _ensure_lgpio_factory():
-        print("display_boot_splash: gpiozero/LGPIO unavailable — skipping button wait", file=sys.stderr)
+        print("display_boot_splash: gpiozero/LGPIO unavailable — skipping button wait", file=sys.stderr, flush=True)
         return
 
     try:
         from gpiozero import Button
     except ImportError:
-        print("display_boot_splash: gpiozero not installed — skipping button wait", file=sys.stderr)
+        print("display_boot_splash: gpiozero not installed — skipping button wait", file=sys.stderr, flush=True)
         return
 
-    def _journal_btn(line: str) -> None:
-        # stderr → systemd journal (visible in journalctl -b / boot log)
+    lock = threading.Lock()
+    state = {"last": "NONE", "select": False}
+
+    def _journal(line: str) -> None:
         print(line, file=sys.stderr, flush=True)
 
-    done = threading.Event()
-    bounce = 0.1
-    buttons = []
+    def _set_last(name: str) -> None:
+        with lock:
+            state["last"] = name
 
     def _on_a():
-        _journal_btn(f"[BTN] A pressed (menu, GPIO{PIN_A})")
+        _set_last("A")
+        _journal(f"[BTN] A (GPIO{PIN_A})")
 
     def _on_x():
-        _journal_btn(f"[BTN] X pressed (up, GPIO{PIN_X})")
+        _set_last("X")
+        _journal(f"[BTN] X (GPIO{PIN_X})")
 
     def _on_y():
-        _journal_btn(f"[BTN] Y pressed (down, GPIO{PIN_Y})")
+        _set_last("Y")
+        _journal(f"[BTN] Y (GPIO{PIN_Y})")
 
     def _on_b():
-        _journal_btn("[BTN] B/Select pressed — continuing")
-        done.set()
+        with lock:
+            state["last"] = "SELECT"
+            state["select"] = True
+        print("[BTN] SELECT detected", file=sys.stderr, flush=True)
+        print("[BTN] SELECT detected", flush=True)
 
+    bounce = 0.1
+    buttons = []
     btn_a = Button(PIN_A, pull_up=True, bounce_time=bounce)
     buttons.append(btn_a)
     btn_a.when_pressed = _on_a
@@ -158,25 +250,65 @@ def _run_button_test(
     buttons.append(btn_y)
     btn_y.when_pressed = _on_y
 
-    timeout_sec: Optional[float]
     raw_to = os.environ.get("RAGNAR_SPLASH_BUTTON_TIMEOUT_SEC", "").strip()
     try:
-        timeout_sec = float(raw_to) if raw_to else None
+        timeout_sec = float(raw_to) if raw_to else 180.0
+        if timeout_sec <= 0:
+            timeout_sec = 180.0
     except ValueError:
-        timeout_sec = None
+        timeout_sec = 180.0
 
-    _draw_button_test_screen(epd, Image, ImageDraw, w, h, font_title, font_small, bg, fg, accent)
+    deadline = time.monotonic() + timeout_sec
+    last_drawn = ""
 
-    deadline = time.monotonic() + timeout_sec if (timeout_sec is not None and timeout_sec > 0) else None
     try:
-        while not done.is_set():
-            if deadline is not None and time.monotonic() >= deadline:
-                print(
-                    "display_boot_splash: RAGNAR_SPLASH_BUTTON_TIMEOUT_SEC — continuing without press",
-                    file=sys.stderr,
-                )
+        while True:
+            now = time.monotonic()
+            with lock:
+                sel = state["select"]
+                last = state["last"]
+            if sel:
+                _draw_button_continue_screen(epd, Image, ImageDraw, w, h, font_title, font_small, bg, fg, accent)
+                print("[✔] Splash input received", file=sys.stderr, flush=True)
+                print("[✔] Splash input received", flush=True)
+                time.sleep(0.9)
                 return
-            done.wait(0.05)
+
+            if now >= deadline:
+                if splash_debug:
+                    print(
+                        "[WARN] Splash timeout reached without button press",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                print(
+                    "[⚠] No button input detected within timeout",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print("[⚠] No button input detected within timeout", flush=True)
+                return
+
+            rem = deadline - now
+            if splash_debug or last != last_drawn:
+                _draw_button_wait_ui(
+                    epd,
+                    Image,
+                    ImageDraw,
+                    w,
+                    h,
+                    font_title,
+                    font_small,
+                    bg,
+                    fg,
+                    accent,
+                    last_input=last,
+                    debug=splash_debug,
+                    remaining_sec=rem if splash_debug else None,
+                )
+                last_drawn = last
+
+            time.sleep(0.05)
     finally:
         for b in buttons:
             try:
@@ -186,6 +318,8 @@ def _run_button_test(
 
 
 def main():
+    _init_lgpio_at_startup()
+
     try:
         from PIL import Image, ImageDraw
         from waveshare_epd import displayhatmini
@@ -219,39 +353,11 @@ def main():
         Image = __import__("PIL.Image", fromlist=["new"])
         ImageDraw = __import__("PIL.ImageDraw", fromlist=["Draw"])
 
-        # 1) Booting...
-        img = Image.new("RGB", (W, H), BG)
-        draw = ImageDraw.Draw(img)
-        text = "Booting..."
-        if font_big:
-            bbox = draw.textbbox((0, 0), text, font=font_big)
-        else:
-            bbox = (0, 0, len(text) * 8, 20)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x, y = (W - tw) // 2, (H - th) // 2
-        draw.text((x, y), text, font=font_big, fill=FG)
-        epd.display(img)
-        time.sleep(2.0)
-
-        # 2) Starting Ragnar...
-        img = Image.new("RGB", (W, H), BG)
-        draw = ImageDraw.Draw(img)
-        text = "Starting Ragnar..."
-        if font_big:
-            bbox = draw.textbbox((0, 0), text, font=font_big)
-        else:
-            bbox = (0, 0, len(text) * 8, 20)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x, y = (W - tw) // 2, (H - th) // 2
-        draw.text((x, y), text, font=font_big, fill=FG)
-        epd.display(img)
-        time.sleep(2.0)
-
-        # 3) System log
+        # 1) Boot log (journal — no duplicate "Starting Ragnar" slides; ragnar-display.service is not used)
         log_lines = _get_boot_log_lines(max_lines=12)
         img = Image.new("RGB", (W, H), BG)
         draw = ImageDraw.Draw(img)
-        draw.text((4, 2), "Boot log:", font=font_small, fill=FG)
+        draw.text((4, 2), "Boot log (journal):", font=font_small, fill=FG)
         y = 16
         max_tw = max(40, W - 8)
         for line in log_lines:
@@ -266,7 +372,11 @@ def main():
         epd.display(img)
         time.sleep(6.0)
 
-        # 4) Button test — press B (Select) to continue
+        # 2) IP / network / SSH
+        _draw_network_screen(epd, Image, ImageDraw, W, H, font_big, font_small, BG, FG, ACCENT)
+        time.sleep(5.0)
+
+        # 3) Button test — press B (Select) to continue
         skip = os.environ.get("RAGNAR_SKIP_DHM_BUTTONS", "").strip().lower()
         skip_test = os.environ.get("RAGNAR_SPLASH_SKIP_BUTTON_TEST", "").strip().lower()
         if skip in ("1", "true", "yes", "on") or skip_test in ("1", "true", "yes"):

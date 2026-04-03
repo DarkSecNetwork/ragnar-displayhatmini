@@ -14,6 +14,8 @@ Wants=NetworkManager.service
 Type=oneshot
 User=root
 RemainAfterExit=yes
+# Network wait (120s) + Wi-Fi/NM + optional kernel reinstall (apt); must finish before systemd kills job
+TimeoutStartSec=900
 Environment=RAGNAR_WIFI_REG=US
 Environment=RAGNAR_NET_WAIT_SEC=120
 Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log

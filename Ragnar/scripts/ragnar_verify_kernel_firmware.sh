@@ -48,8 +48,8 @@ for pat in brcmfmac43430-sdio.bin brcmfmac43436-sdio.bin brcmfmac43455-sdio.bin;
 done
 if [[ "$BRCM_OK" -eq 0 ]]; then
   echo "⚠ Installing firmware-brcm80211 ( SDIO blob missing )"
-  apt-get update -y || true
-  apt-get install -y firmware-brcm80211 2>/dev/null || true
+  timeout 300 apt-get update -y || true
+  timeout 300 apt-get install -y firmware-brcm80211 2>/dev/null || true
   BRCM_OK=0
   for pat in brcmfmac43430-sdio.bin brcmfmac43436-sdio.bin brcmfmac43455-sdio.bin; do
     if find /lib/firmware/brcm -name "$pat" 2>/dev/null | head -1 | grep -q .; then
@@ -64,8 +64,8 @@ fi
 
 if [[ "$KERNEL_MISMATCH" -eq 1 ]]; then
   echo "Applying kernel/bootloader reinstall due to mismatch..."
-  apt-get update -y || true
-  if apt-get install --reinstall -y raspberrypi-bootloader raspberrypi-kernel; then
+  timeout 300 apt-get update -y || true
+  if timeout 600 apt-get install --reinstall -y raspberrypi-bootloader raspberrypi-kernel; then
     touch "$REBOOT_FLAG"
     echo "RAGNAR: reboot required — kernel/bootloader reinstalled ($(date -Is))" | tee -a "$LOG"
     echo "✔ Mitigated: packages reinstalled; created $REBOOT_FLAG"

@@ -859,8 +859,6 @@ class Display:
         """Drain gpiozero button queue (non-blocking). Safe to call frequently from main loop or sleep slices."""
         if not self.dhm_listener or not self.dhm_listener.available:
             return
-        if EVENT_MENU_TOGGLE is None:
-            return
         import os as _os
         _log_ev = _os.environ.get("RAGNAR_DHM_LOG_EVENTS", "").strip().lower() in ("1", "true", "yes")
         while True:
@@ -891,12 +889,12 @@ class Display:
                 continue
 
             if ev == EVENT_MENU_TOGGLE:
-                if build_flat_entries is not None:
-                    was_visible = self.menu_visible
-                    self.menu_visible = not self.menu_visible
-                    if self.menu_visible and not was_visible:
-                        self.menu_scroll = 0
-                        self.menu_cursor = 0
+                # Toggle even if displayhatmini_menu failed to import (otherwise A does nothing).
+                was_visible = self.menu_visible
+                self.menu_visible = not self.menu_visible
+                if self.menu_visible and not was_visible:
+                    self.menu_scroll = 0
+                    self.menu_cursor = 0
             elif ev == EVENT_BACK:
                 self.menu_visible = False
             elif ev == EVENT_UP and self.menu_visible:
@@ -1377,56 +1375,18 @@ class Display:
             while not self.shared_data.display_should_exit:
                 time.sleep(1.0)
             return
-        # Show Loading Ragnar + last ragnar log lines until deferred init (Display HAT Mini)
-        # Black background, white text; w,h from config so landscape/portrait is correct
+        # Display HAT Mini: boot splash (ExecStartPre) already showed journal + network + button test;
+        # do not duplicate journalctl "Loading Ragnar" here — only wait for deferred init and drain buttons.
         try:
-            if getattr(self.shared_data, 'config', {}).get('epd_type') == 'displayhatmini':
-                w, h = self.shared_data.width, self.shared_data.height
-                done = getattr(self.shared_data, '_deferred_init_done', None)
-                timeout = 30.0
-                start = time.time()
-                bg, fg = (0, 0, 0), (255, 255, 255)
-                try:
-                    from display_text_util import compact_journal_line, ellipsis_fit_to_width as _ellipsis_fit_dhm
-                except ImportError:
-                    compact_journal_line = lambda s: (s or "").strip()
-                    _ellipsis_fit_dhm = None  # type: ignore[misc, assignment]
-                while (time.time() - start) < timeout:
-                    try:
-                        out = subprocess.check_output(
-                            ['journalctl', '-u', 'ragnar', '-n', '6', '--no-pager', '-o', 'short-iso'],
-                            timeout=2, text=True)
-                        log_lines = [l.strip() for l in out.strip().splitlines() if l.strip()][-6:]
-                    except Exception:
-                        log_lines = []
-                    img = Image.new('RGB', (w, h), bg)
-                    draw = ImageDraw.Draw(img)
-                    try:
-                        font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-                        font_sm = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
-                    except Exception:
-                        font = ImageDraw.ImageFont.load_default()
-                        font_sm = font
-                    draw.text((max(0, w//2 - 60), 8), "Loading Ragnar...", font=font, fill=fg)
-                    y = 36
-                    max_tw = max(40, w - 8)
-                    for raw in log_lines:
-                        if y + 12 > h:
-                            break
-                        msg = compact_journal_line(raw)
-                        if _ellipsis_fit_dhm is not None:
-                            line = _ellipsis_fit_dhm(draw, msg, font_sm, max_tw)
-                        else:
-                            line = msg[: max(20, w // 6)]
-                        draw.text((4, y), line, font=font_sm, fill=fg)
-                        y += 12
-                    self.epd_helper.display_partial(img)
-                    if done and done.is_set():
-                        break
-                    # Allow DHM queue to drain during splash (buttons may attach mid-wait)
+            if getattr(self.shared_data, "config", {}).get("epd_type") == "displayhatmini":
+                t0 = time.time()
+                while (time.time() - t0) < 30.0:
                     if self.dhm_listener and self.dhm_listener.available:
                         self._drain_dhm_menu_events()
-                    time.sleep(2)
+                    done = getattr(self.shared_data, "_deferred_init_done", None)
+                    if done and done.is_set():
+                        break
+                    time.sleep(0.05)
         except Exception:
             pass
         # Wait for deferred initialization (fonts, images) to finish

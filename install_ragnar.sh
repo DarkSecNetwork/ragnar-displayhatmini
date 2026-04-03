@@ -1230,6 +1230,7 @@ Wants=network-pre.target NetworkManager.service
 Type=oneshot
 User=root
 RemainAfterExit=yes
+TimeoutStartSec=900
 Environment=RAGNAR_WIFI_REG=${RAGNAR_WIFI_REG:-US}
 Environment=RAGNAR_NET_WAIT_SEC=120
 Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
@@ -1251,6 +1252,7 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 User=root
+TimeoutStartSec=90
 Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
 ExecStart=$RAGNAR_DIR/scripts/ragnar_mitigate_bluetooth.sh
 StandardOutput=journal
@@ -1269,6 +1271,7 @@ ConditionPathExists=/var/run/ragnar-network-degraded
 Type=oneshot
 RemainAfterExit=yes
 User=root
+TimeoutStartSec=120
 Environment=RAGNAR_MITIGATION_LOG=/var/log/ragnar-mitigations.log
 ExecStart=$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh start
 ExecStop=$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh stop
@@ -1710,7 +1713,7 @@ if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
     echo "WARNING: Ragnar/scripts/display_boot_splash.py missing from installer bundle" >&2
   fi
   BOOT_SPLASH_LINE="ExecStartPre=/usr/bin/python3 $RAGNAR_DIR/scripts/display_boot_splash.py"
-  BOOT_SPLASH_ENV="Environment=DISPLAY_BOOT_W=$DISPLAYHATMINI_REF_W DISPLAY_BOOT_H=$DISPLAYHATMINI_REF_H"
+  BOOT_SPLASH_ENV="Environment=DISPLAY_BOOT_W=$DISPLAYHATMINI_REF_W DISPLAY_BOOT_H=$DISPLAYHATMINI_REF_H RAGNAR_SPLASH_BUTTON_TIMEOUT_SEC=180"
 else
   BOOT_SPLASH_LINE=""
   BOOT_SPLASH_ENV=""
@@ -1837,13 +1840,10 @@ VERIFYSH
   chmod +x "$RAGNAR_DIR/scripts/verify_displayhatmini_boot.sh"
 fi
 
-# Optional: boot journal viewer on Display HAT Mini (must complete before ragnar — same SPI bus)
+# Optional: ragnar-display.service (live journal tail) — OFF by default: display_boot_splash.py already
+# uses the LCD (boot log + network + button test). Ordering two units caused duplicate boot screens.
 DISPLAY_AFTER_BOOT=""
 DISPLAY_WANTS_BOOT=""
-if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
-  DISPLAY_AFTER_BOOT=" ragnar-display.service"
-  DISPLAY_WANTS_BOOT=" ragnar-display.service"
-fi
 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing ragnar-display.service (boot log on HAT Mini, before ragnar)..."
@@ -1929,13 +1929,13 @@ StandardOutput=journal
 StandardError=journal
 # Environment
 Environment=PYTHONUNBUFFERED=1
-Environment=RAGNAR_DHM_BUTTON_DELAY=1.0
+Environment=RAGNAR_DHM_BUTTON_DELAY=0.25
 Environment=RAGNAR_GPIOZERO_FACTORY=lgpio
 $BOOT_SPLASH_ENV
 $PISUGAR_ENV_LINE
 $PISUGAR_CONNECT_ENV
-# Timeouts (start can be slow: splash + deferred init + display)
-TimeoutStartSec=180
+# Start must cover: ExecStartPre sleep + splash (boot log + network + button wait up to RAGNAR_SPLASH_BUTTON_TIMEOUT_SEC) + Python/deferred init
+TimeoutStartSec=600
 TimeoutStopSec=30
 
 [Install]
@@ -1986,8 +1986,8 @@ ls /dev/spi* || true
 echo "Enabling and starting Ragnar..."
 systemctl daemon-reload
 if [ "$DISPLAY_MODE" = "displayhatmini" ] && [ -f /etc/systemd/system/ragnar-display.service ]; then
-  systemctl enable ragnar-display.service 2>/dev/null || true
-  echo "Enabled ragnar-display.service (boot log on HAT Mini ends before ragnar starts)."
+  systemctl disable ragnar-display.service 2>/dev/null || true
+  echo "  ragnar-display.service left disabled (splash owns the panel). Enable manually: sudo systemctl enable --now ragnar-display"
 fi
 systemctl enable ragnar
 

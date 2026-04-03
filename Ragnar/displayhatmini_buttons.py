@@ -96,7 +96,7 @@ class DisplayHATMiniButtonListener:
             logger.info("Display HAT Mini buttons disabled (RAGNAR_SKIP_DHM_BUTTONS)")
             return
         try:
-            delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "1.0"))
+            delay = float(os.environ.get("RAGNAR_DHM_BUTTON_DELAY", "0.25"))
         except ValueError:
             delay = 1.0
         delay = max(0.0, delay)

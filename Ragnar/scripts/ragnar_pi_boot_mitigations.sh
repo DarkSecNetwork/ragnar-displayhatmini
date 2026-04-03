@@ -11,7 +11,8 @@ export RAGNAR_NET_IFACE="${RAGNAR_NET_IFACE:-}"
 export RAGNAR_MITIGATION_LOG="${RAGNAR_MITIGATION_LOG:-/var/log/ragnar-mitigations.log}"
 
 if [[ "$(id -u)" -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
-  apt-get install -y rfkill firmware-brcm80211 iw network-manager iputils-ping 2>/dev/null || true
+  # Bound apt so a stuck dpkg lock cannot hang boot forever (mitigations unit has TimeoutStartSec too).
+  timeout 180 apt-get install -y rfkill firmware-brcm80211 iw network-manager iputils-ping 2>/dev/null || true
 fi
 
 mkdir -p "$(dirname "$RAGNAR_MITIGATION_LOG")" 2>/dev/null || true
