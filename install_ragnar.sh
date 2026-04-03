@@ -1054,6 +1054,40 @@ apt install -y raspi-gpio 2>/dev/null || true
 # Ragnar starts these via systemctl on demand; stock images sometimes mask them.
 systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
+# PipeWire / WirePlumber / xdg-desktop-portal: org.freedesktop.RealtimeKit1 → rtkit-daemon on system D-Bus.
+# WirePlumber "Failed to get percentage from UPower" → upower.service.
+echo "RTKit + UPower (RealtimeKit + power D-Bus; fixes ServiceUnknown for portal/PipeWire)..."
+apt install -y rtkit upower 2>/dev/null || true
+if ! dpkg -s rtkit &>/dev/null; then
+  echo "WARNING: package rtkit did not install — org.freedesktop.RealtimeKit1 will stay missing until: sudo apt install rtkit && sudo systemctl enable --now rtkit-daemon.service"
+fi
+if systemctl cat rtkit-daemon.service &>/dev/null; then
+  systemctl unmask rtkit-daemon.service 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable rtkit-daemon.service 2>/dev/null || true
+  systemctl restart rtkit-daemon.service 2>/dev/null || systemctl start rtkit-daemon.service 2>/dev/null || true
+fi
+systemctl enable upower.service 2>/dev/null || true
+systemctl start upower.service 2>/dev/null || true
+if busctl --system list 2>/dev/null | grep -q 'org.freedesktop.RealtimeKit1'; then
+  echo "  RTKit: org.freedesktop.RealtimeKit1 is on the system bus."
+else
+  echo "  RTKit: if ServiceUnknown persists (xdg-desktop-portal/PipeWire), reboot once so RTKit registers before session."
+fi
+
+# Polkit: GIO may open /usr/local/share/polkit-1/rules.d — missing dir spams GLib "g-file-error-quark" errors.
+# ALSA: alsactl UCM "failed to import hw:0 use case" (-2) is often missing alsa-ucm-conf profiles.
+echo "Polkit /usr/local rules dir + ALSA UCM (quiet common polkit/alsactl noise)..."
+mkdir -p /usr/local/share/polkit-1/rules.d
+chmod 755 /usr/local/share/polkit-1 /usr/local/share/polkit-1/rules.d 2>/dev/null || true
+apt install -y alsa-ucm-conf alsa-utils 2>/dev/null || true
+
+# NFS block-layout daemon: err if rpc_pipefs not mounted (typical when NFS unused). Optional disable.
+if [[ "${RAGNAR_INSTALLER_DISABLE_NFS_HELPERS:-0}" == "1" ]]; then
+  echo "RAGNAR_INSTALLER_DISABLE_NFS_HELPERS=1: disabling blkmapd (no NFS block layout)..."
+  systemctl disable --now blkmapd.service 2>/dev/null || true
+fi
+
 echo "Installing Python packages..."
   pip3 install --break-system-packages --ignore-installed --no-cache-dir typing_extensions paramiko st7789 luma.lcd luma.core spidev pillow numpy pandas pandas-stubs openai "cryptography<45" || true
 
@@ -1986,6 +2020,7 @@ Type=oneshot
 User=root
 Group=root
 UMask=0022
+Environment=RAGNAR_BOOT_ERRORS_QUIET_KNOWN=1
 ExecStartPre=/bin/sleep 35
 ExecStart=$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh
 

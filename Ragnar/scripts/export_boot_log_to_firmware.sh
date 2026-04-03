@@ -9,6 +9,7 @@
 # Env (optional):
 #   RAGNAR_BOOT_LOG_DIR       Directory on boot FAT (default: <boot>/Boot_Log)
 #   RAGNAR_BOOT_LOG_KEEP      Number of full log files to retain (default: 3)
+#   RAGNAR_BOOT_ERRORS_QUIET_KNOWN  If not 0, drop common benign journal err lines (default: 1)
 # Does not use set -e: must exit 0 so systemd does not mark the unit failed if the FS is ro.
 set -uo pipefail
 
@@ -102,6 +103,10 @@ JERR=""
 if command -v journalctl >/dev/null 2>&1; then
   JERR=$(journalctl -b -p err --no-pager -o short-iso 2>/dev/null || true)
 fi
+# Known noisy err-priority lines on Pi OS (packaging/driver): optional filter for latest-boot-errors.log only.
+if [[ "${RAGNAR_BOOT_ERRORS_QUIET_KNOWN:-1}" != "0" ]] && [[ -n "${JERR//[$' \t\r\n']/}" ]]; then
+  JERR=$(printf '%s\n' "$JERR" | grep -Ev '90-alsa-restore\.rules.*no matching label|blkmapd\[[0-9]+\]: open pipe file.*/run/rpc_pipefs/nfs/blocklayout|bluetoothd\[[0-9]+\]: Failed to set mode|wpa_supplicant\[[0-9]+\]: nl80211: kernel reports: Registration to specific type not supported|wpa_supplicant\[[0-9]+\]: bgscan simple: Failed to enable signal strength monitoring' || true)
+fi
 DERR=""
 DMESG_LEVEL_OK=0
 if command -v dmesg >/dev/null 2>&1 && dmesg -h 2>&1 | grep -q -- '--level'; then
@@ -112,6 +117,9 @@ fi
   echo "=== Ragnar: errors from latest boot (overwritten each export) ==="
   echo "Generated: $(date -Is)"
   echo "Hostname: $(hostname 2>/dev/null || echo unknown)"
+  if [[ "${RAGNAR_BOOT_ERRORS_QUIET_KNOWN:-1}" != "0" ]]; then
+    echo "Note: common benign lines filtered (ALSA udev GOTO, blkmapd/NFS, BT mode, wpa nl80211/bgscan). Raw: full timestamped log. Disable: RAGNAR_BOOT_ERRORS_QUIET_KNOWN=0"
+  fi
   echo
   echo "=== journalctl -b -p err (emerg, alert, crit, err) ==="
   if ! command -v journalctl >/dev/null 2>&1; then
