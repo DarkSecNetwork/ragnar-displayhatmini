@@ -1322,7 +1322,7 @@ pip3 install --break-system-packages --ignore-installed --no-cache-dir paramiko 
 if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   echo "Installing Display HAT Mini dependencies (gpiod, gpiodevice, gpiozero, lgpio)..."
   apt install -y python3-gpiod python3-lgpio 2>/dev/null || true
-  pip3 install --break-system-packages gpiod gpiodevice "gpiozero>=2.0" 2>&1 | grep -v "DEPRECATION:" || true
+  pip3 install --break-system-packages gpiod gpiodevice "gpiozero>=2.0" "qrcode[pil]" 2>&1 | grep -v "DEPRECATION:" || true
   echo "Creating Display HAT Mini compatibility driver..."
   WSPATH=$(python3 - <<'PY'
 import importlib.util

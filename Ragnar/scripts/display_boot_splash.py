@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 _R = Path(__file__).resolve().parent.parent
 _SCRIPTS = Path(__file__).resolve().parent
@@ -165,6 +166,131 @@ def _draw_button_wait_ui(
     epd.display(img)
 
 
+def _draw_raw_gpio_ui(
+    epd,
+    Image,
+    ImageDraw,
+    w: int,
+    h: int,
+    font_title,
+    font_small,
+    bg,
+    fg,
+    accent,
+    *,
+    vals: dict,
+    remaining_sec: Optional[float],
+    hint: str,
+) -> None:
+    """Low-level GPIO diagnostic: show BCM pin levels (5,6,16,24)."""
+    img = Image.new("RGB", (w, h), bg)
+    draw = ImageDraw.Draw(img)
+    y = 4
+    if font_title:
+        draw.text((4, y), "RAW GPIO", font=font_title, fill=accent)
+        y += 26
+    margin_x = 4
+    max_tw = max(40, w - 8)
+    lh = 12
+    parts = [f"{p}={vals.get(p, '?')}" for p in (PIN_A, PIN_B, PIN_X, PIN_Y)]
+    line = " ".join(parts)
+    shown = (
+        ellipsis_fit_to_width(draw, line, font_small, max_tw)
+        if font_small and ellipsis_fit_to_width is not None
+        else line[:56]
+    )
+    draw.text((margin_x, y), shown, font=font_small, fill=fg)
+    y += lh + 2
+    if hint:
+        hs = (
+            ellipsis_fit_to_width(draw, hint, font_small, max_tw)
+            if font_small and ellipsis_fit_to_width is not None
+            else hint[:56]
+        )
+        draw.text((margin_x, y), hs, font=font_small, fill=(180, 200, 255))
+        y += lh
+    if remaining_sec is not None:
+        draw.text(
+            (margin_x, y),
+            f"Timeout ~{int(max(0, remaining_sec))}s  (B low = continue)",
+            font=font_small,
+            fill=(150, 150, 150),
+        )
+    epd.display(img)
+
+
+def _open_raw_pin_reader(pins: tuple[int, ...]):
+    """Return (reader, None) or (None, error string). Prefer lgpio, then RPi.GPIO."""
+    pins = tuple(pins)
+
+    def _read_lgpio():
+        import lgpio
+
+        pull = getattr(lgpio, "SET_PULL_UP", None)
+        if pull is None:
+            pull = 0x00000020
+
+        h = None
+        for chip in (0, 4):
+            try:
+                h = lgpio.gpiochip_open(chip)
+                break
+            except Exception:
+                continue
+        if h is None:
+            raise RuntimeError("gpiochip_open failed for chips 0 and 4")
+
+        for p in pins:
+            try:
+                lgpio.gpio_claim_input(h, p, pull)
+            except TypeError:
+                lgpio.gpio_claim_input(h, p)
+
+        class _R:
+            def read(self_inner):
+                return {p: int(lgpio.gpio_read(h, p)) for p in pins}
+
+            def close(self_inner):
+                for p in pins:
+                    try:
+                        lgpio.gpio_free(h, p)
+                    except Exception:
+                        pass
+                try:
+                    lgpio.gpiochip_close(h)
+                except Exception:
+                    pass
+
+        return _R()
+
+    try:
+        return _read_lgpio(), None
+    except Exception as e:
+        lgpio_err = str(e)
+
+    try:
+        import RPi.GPIO as GPIO
+
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        for p in pins:
+            GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+        class _R:
+            def read(self_inner):
+                return {p: int(GPIO.input(p)) for p in pins}
+
+            def close(self_inner):
+                try:
+                    GPIO.cleanup()
+                except Exception:
+                    pass
+
+        return _R(), None
+    except Exception as e2:
+        return None, f"lgpio: {lgpio_err}; RPi.GPIO: {e2}"
+
+
 def _draw_button_continue_screen(epd, Image, ImageDraw, w, h, font_title, font_small, bg, fg, accent):
     img = Image.new("RGB", (w, h), bg)
     draw = ImageDraw.Draw(img)
@@ -258,8 +384,27 @@ def _run_button_test(
     except ValueError:
         timeout_sec = 180.0
 
+    raw_fallback_sec = 5.0
+    raw_env = os.environ.get("RAGNAR_SPLASH_RAW_FALLBACK_SEC", "").strip()
+    if raw_env:
+        try:
+            raw_fallback_sec = float(raw_env)
+        except ValueError:
+            pass
+    raw_fallback_sec = max(0.0, raw_fallback_sec)
+
     deadline = time.monotonic() + timeout_sec
     last_drawn = ""
+    wait_start = time.monotonic()
+    raw_pins = (PIN_A, PIN_B, PIN_X, PIN_Y)
+
+    def _close_gpiozero_buttons() -> None:
+        for b in buttons:
+            try:
+                b.close()
+            except Exception:
+                pass
+        buttons.clear()
 
     try:
         while True:
@@ -288,6 +433,124 @@ def _run_button_test(
                 )
                 print("[⚠] No button input detected within timeout", flush=True)
                 return
+
+            # No gpiozero activity for N seconds → low-level read to isolate library vs wiring.
+            if raw_fallback_sec > 0 and (now - wait_start) >= raw_fallback_sec and last == "NONE":
+                print(
+                    f"[GPIO] No gpiozero events in {raw_fallback_sec:g}s — raw pin read diagnostic",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(
+                    f"[GPIO] No gpiozero events in {raw_fallback_sec:g}s — raw pin read diagnostic",
+                    flush=True,
+                )
+                _close_gpiozero_buttons()
+                time.sleep(0.05)
+                reader, raw_err = _open_raw_pin_reader(raw_pins)
+                if reader is None:
+                    print(f"[GPIO] Raw read unavailable: {raw_err}", file=sys.stderr, flush=True)
+                    print(f"[GPIO] Raw read unavailable: {raw_err}", flush=True)
+                    return
+
+                baseline: Optional[dict[int, int]] = None
+                raw_levels_changed = False
+                try:
+                    while True:
+                        now = time.monotonic()
+                        if now >= deadline:
+                            if raw_levels_changed:
+                                print(
+                                    "[GPIO] Raw levels changed during wait but gpiozero reported no events — "
+                                    "likely gpiozero / pin-factory layer issue",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                print(
+                                    "[GPIO] Raw levels changed during wait but gpiozero reported no events — "
+                                    "likely gpiozero / pin-factory layer issue",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    "[GPIO] Raw levels never changed — check BCM pin mapping, wiring, "
+                                    "or display/SPI interference",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                print(
+                                    "[GPIO] Raw levels never changed — check BCM pin mapping, wiring, "
+                                    "or display/SPI interference",
+                                    flush=True,
+                                )
+                            if splash_debug:
+                                print(
+                                    "[WARN] Splash timeout reached without button press",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                            print(
+                                "[⚠] No button input detected within timeout",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            print("[⚠] No button input detected within timeout", flush=True)
+                            return
+
+                        vals = reader.read()
+                        parts = [f"{p}={vals[p]}" for p in raw_pins]
+                        print(f"[GPIO RAW] {' '.join(parts)}", file=sys.stderr, flush=True)
+                        print(f"[GPIO RAW] {' '.join(parts)}", flush=True)
+
+                        if baseline is None:
+                            baseline = dict(vals)
+                        elif vals != baseline:
+                            raw_levels_changed = True
+
+                        rem = deadline - now
+                        hint = "Press buttons; levels should toggle. B low = continue."
+                        _draw_raw_gpio_ui(
+                            epd,
+                            Image,
+                            ImageDraw,
+                            w,
+                            h,
+                            font_title,
+                            font_small,
+                            bg,
+                            fg,
+                            accent,
+                            vals=vals,
+                            remaining_sec=rem if splash_debug else None,
+                            hint=hint,
+                        )
+
+                        if vals.get(PIN_B) == 0:
+                            print(
+                                "[GPIO] B (GPIO%d) read low via raw GPIO — gpiozero saw no prior events — "
+                                "likely gpiozero / pin-factory layer issue" % PIN_B,
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            print(
+                                "[GPIO] B (GPIO%d) read low via raw GPIO — gpiozero saw no prior events — "
+                                "likely gpiozero / pin-factory layer issue" % PIN_B,
+                                flush=True,
+                            )
+                            _draw_button_continue_screen(
+                                epd, Image, ImageDraw, w, h, font_title, font_small, bg, fg, accent
+                            )
+                            print("[✔] Splash input received", file=sys.stderr, flush=True)
+                            print("[✔] Splash input received", flush=True)
+                            time.sleep(0.9)
+                            return
+
+                        time.sleep(0.5)
+                finally:
+                    try:
+                        reader.close()
+                    except Exception:
+                        pass
 
             rem = deadline - now
             if splash_debug or last != last_drawn:

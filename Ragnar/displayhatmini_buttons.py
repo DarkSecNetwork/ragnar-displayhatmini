@@ -2,17 +2,26 @@
 # Pimoroni Display HAT Mini: A=5, B=6, X=16, Y=24 (GPIO BCM)
 # A = Toggle menu, B = Select (short) / Back (long or double-tap), X = Up, Y = Down
 #
+# Runtime input model: gpiozero fires callbacks on its own threads; events go into a queue.Queue()
+# (put_nowait in callbacks, get_nowait in the display loop). The main loop never polls GPIO or blocks
+# on buttons. Do not use wait_for_press() or signal.pause() for this — not required for gpiozero.
+#
 # RAGNAR_SKIP_DHM_BUTTONS=1 — skip gpiozero buttons (debug / PiSugar GPIO conflicts).
 # RAGNAR_DHM_BUTTON_DELAY — seconds to wait before attaching buttons (default 1.0; increase if SPI races remain).
 # RAGNAR_GPIOZERO_FACTORY — force pin factory: lgpio | native | rpigpio (Bookworm/Pi 5: use lgpio).
+# RAGNAR_DHM_BUTTON_DEBUG=1 — print [BTN] … pressed to stderr for every queued event.
 
 import logging
 import os
+import sys
 import threading
 import time
 import queue
 
 logger = logging.getLogger(__name__)
+
+# Queue payload kind for future inputs (rotary, touch, …)
+INPUT_KIND_BUTTON = "BUTTON"
 
 
 def _ensure_gpiozero_pin_factory():
@@ -74,9 +83,45 @@ EVENT_DOWN = "down"
 EVENT_SELECT = "select"
 EVENT_BACK = "back"
 
+_EVENT_DEBUG_LABEL = {
+    EVENT_MENU_TOGGLE: "A",
+    EVENT_SELECT: "SELECT",
+    EVENT_UP: "X",
+    EVENT_DOWN: "Y",
+    EVENT_BACK: "BACK",
+}
+
+
+def normalize_dhm_queue_event(raw):
+    """Turn queue item into logical event string (handles ``(INPUT_KIND_BUTTON, EVENT_*)`` tuples)."""
+    if raw is None:
+        return None
+    if isinstance(raw, tuple) and len(raw) >= 2 and raw[0] == INPUT_KIND_BUTTON:
+        return raw[1]
+    if isinstance(raw, str):
+        return raw
+    return None
+
+
+def _ensure_lgpio_pin_factory_first() -> bool:
+    """Prefer LGPIO explicitly (Bookworm / Pi 5); matches display_boot_splash / service env."""
+    try:
+        from gpiozero import Device
+        from gpiozero.pins.lgpio import LGPIOFactory
+
+        Device.pin_factory = LGPIOFactory()
+        logger.info("gpiozero LGPIO pin factory active (Display HAT Mini)")
+        return True
+    except Exception as e:
+        logger.debug("LGPIO factory first choice failed: %s", e)
+        return False
+
 
 class DisplayHATMiniButtonListener:
-    """Listens for A,B,X,Y on Display HAT Mini. B long-press or double-tap = Back."""
+    """Display HAT Mini: gpiozero ``Button`` callbacks enqueue ``(INPUT_KIND_BUTTON, event)``; main loop drains with ``get_nowait``.
+
+    B short = select, B long / double-tap = back. A = menu toggle. X/Y = up/down.
+    """
 
     def __init__(self, shared_data):
         self.shared_data = shared_data
@@ -110,7 +155,8 @@ class DisplayHATMiniButtonListener:
 
     def _start_impl(self):
         try:
-            _ensure_gpiozero_pin_factory()
+            if not _ensure_lgpio_pin_factory_first():
+                _ensure_gpiozero_pin_factory()
             from gpiozero import Button
             a = Button(PIN_A, pull_up=True, bounce_time=0.15)
             b = Button(PIN_B, pull_up=True, bounce_time=0.15)
@@ -139,15 +185,27 @@ class DisplayHATMiniButtonListener:
         self._buttons = []
 
     def get_event(self):
-        """Non-blocking: return next event string or None."""
+        """Non-blocking: next item from the queue, or None.
+
+        Items are ``(INPUT_KIND_BUTTON, EVENT_*)`` tuples so other input sources can share the queue later.
+        Use :func:`normalize_dhm_queue_event` in the consumer to get the logical event string.
+        """
         try:
             return self._event_queue.get_nowait()
         except queue.Empty:
             return None
 
-    def _put(self, evt):
+    def _btn_debug_stderr(self, evt: str) -> None:
+        env = os.environ.get("RAGNAR_DHM_BUTTON_DEBUG", "").strip().lower()
+        if env not in ("1", "true", "yes", "on"):
+            return
+        label = _EVENT_DEBUG_LABEL.get(evt, evt)
+        print(f"[BTN] {label} pressed", file=sys.stderr, flush=True)
+
+    def _put(self, evt: str):
+        self._btn_debug_stderr(evt)
         try:
-            self._event_queue.put_nowait(evt)
+            self._event_queue.put_nowait((INPUT_KIND_BUTTON, evt))
         except queue.Full:
             pass
 

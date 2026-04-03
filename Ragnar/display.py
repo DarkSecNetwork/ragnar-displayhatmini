@@ -12,6 +12,7 @@
 # - Checking and displaying the status of Bluetooth, Wi-Fi, PAN, and USB connections.
 # - Providing methods to update the display with comments from an AI (Commentaireia) and generating images dynamically.
 
+import math
 import threading
 import time
 import os
@@ -49,6 +50,7 @@ except ImportError:
 try:
     from displayhatmini_buttons import (
         DisplayHATMiniButtonListener,
+        normalize_dhm_queue_event,
         EVENT_MENU_TOGGLE,
         EVENT_UP,
         EVENT_DOWN,
@@ -63,6 +65,7 @@ try:
     )
 except ImportError:
     DisplayHATMiniButtonListener = None
+    normalize_dhm_queue_event = None  # type: ignore[misc, assignment]
     EVENT_MENU_TOGGLE = EVENT_UP = EVENT_DOWN = EVENT_SELECT = EVENT_BACK = None
     build_flat_entries = get_selectable_count = cursor_to_line_index = apply_select = None
 
@@ -70,6 +73,32 @@ try:
     import system_health
 except ImportError:
     system_health = None  # type: ignore[misc, assignment]
+
+try:
+    from dhm_ui_state import (
+        STATE_HOME,
+        STATE_MENU,
+        STATE_SETTINGS,
+        STATE_WIFI_MENU,
+        STATE_WIFI_LIST,
+        STATE_FULL_MENU,
+        STATE_NETWORK_MODE,
+        STATE_HOTSPOT,
+        dhm_state_ui_enabled,
+        map_hardware_event_to_logical,
+        handle_dhm_state_event,
+    )
+except ImportError:
+    STATE_HOME = "HOME"
+    STATE_MENU = "MENU"
+    STATE_SETTINGS = "SETTINGS"
+    STATE_WIFI_MENU = STATE_WIFI_LIST = STATE_FULL_MENU = STATE_NETWORK_MODE = STATE_HOTSPOT = "UNAVAILABLE"
+
+    def dhm_state_ui_enabled():
+        return False
+
+    map_hardware_event_to_logical = None  # type: ignore[misc, assignment]
+    handle_dhm_state_event = None  # type: ignore[misc, assignment]
 
 class Display:
     def __init__(self, shared_data):
@@ -133,7 +162,23 @@ class Display:
         self.menu_visible = False
         self.menu_cursor = 0
         self.menu_scroll = 0
+        self.dhm_ui = None
         epd_type = self.config.get("epd_type", "")
+        self._dhm_state_ui = (
+            epd_type == "displayhatmini"
+            and bool(dhm_state_ui_enabled())
+            and apply_select is not None
+            and handle_dhm_state_event is not None
+            and map_hardware_event_to_logical is not None
+        )
+        if self._dhm_state_ui:
+            try:
+                from dhm_ui_state import UIState
+
+                self.dhm_ui = UIState()
+            except ImportError:
+                self.dhm_ui = None
+                self._dhm_state_ui = False
         if epd_type == "displayhatmini" and DisplayHATMiniButtonListener is not None:
             self.dhm_listener = DisplayHATMiniButtonListener(shared_data)
             self.dhm_listener.start()
@@ -793,6 +838,307 @@ class Display:
                     draw.text((2, y), text[:42], font=font, fill=0)
             y += line_height
 
+    def _render_dhm_root_menu(self, image, draw):
+        """State UI: root menu — 32px icons, 40px rows, bold type, inverted selection, icon bounce."""
+        try:
+            from dhm_ui_state import ROOT_MENU_SPEC, ROOT_MENU_ROW_HEIGHT
+            from dhm_menu_icons import ICON_SIZE_DEFAULT, invert_icon_1bit, load_menu_icon
+        except ImportError:
+            return
+        if not self.dhm_ui or not ROOT_MENU_SPEC:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        ui = self.dhm_ui
+        row_h = ROOT_MENU_ROW_HEIGHT
+        icon_w = ICON_SIZE_DEFAULT
+        title_h = 22
+        text_x = 4 + icon_w + 6
+        idx = max(0, min(ui.root_index, len(ROOT_MENU_SPEC) - 1))
+        ui.root_index = idx
+        try:
+            font_title = ImageDraw.ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16
+            )
+            font_row = ImageDraw.ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15
+            )
+        except Exception:
+            font_title = font_row = ImageDraw.ImageFont.load_default()
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        draw.text((4, 2), "Menu", fill=0, font=font_title)
+        off = int(ui.scroll_offset)
+        base_y = 2 + title_h
+        bounce = lambda sel: int(math.sin(time.time() * 10.0) * 2.0) if sel else 0
+        for i, spec in enumerate(ROOT_MENU_SPEC):
+            y = base_y + i * row_h - off
+            if y < -row_h or y > H - 2:
+                continue
+            label = spec["label"][: max(1, (W - text_x - 4) // 9)]
+            icn_name = spec.get("icon") or "wifi"
+            highlight = i == idx
+            row_top = max(0, y)
+            row_bot = min(H - 1, y + row_h - 1)
+            if highlight:
+                draw.rectangle((0, row_top, W - 1, row_bot), fill=0)
+            icn = load_menu_icon(icn_name, (icon_w, icon_w))
+            if highlight:
+                icn = invert_icon_1bit(icn)
+            iy = row_top + (row_h - icon_w) // 2 + bounce(highlight)
+            iy = max(row_top, min(iy, row_bot - icon_w))
+            image.paste(icn, (4, iy))
+            ty = row_top + (row_h - 15) // 2
+            fill = 255 if highlight else 0
+            draw.text((text_x, ty), label, font=font_row, fill=fill)
+
+    def _render_dhm_wifi_menu(self, image, draw):
+        """WiFi hub: scan / connect / back."""
+        try:
+            from dhm_ui_state import WIFI_MENU_SPEC, LINE_HEIGHT
+        except ImportError:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        ui = self.dhm_ui
+        if not ui:
+            return
+        lh = LINE_HEIGHT
+        try:
+            font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        except Exception:
+            font = ImageDraw.ImageFont.load_default()
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        status = (ui.wifi_status_line or "")[:44]
+        scan = " …" if ui.wifi_scanning else ""
+        draw.text((2, 2), f"WiFi{scan}", fill=0, font=font)
+        if status:
+            draw.text((2, 16), status, fill=0, font=font)
+        y0 = 34 if status else 22
+        for i, spec in enumerate(WIFI_MENU_SPEC):
+            y = y0 + i * lh
+            if y > H - lh:
+                break
+            sel = i == ui.wifi_menu_index
+            line = spec["label"][:40]
+            if sel:
+                draw.rectangle((0, y - 1, W - 1, y + lh), fill=0)
+                draw.text((2, y), line, font=font, fill=255)
+            else:
+                draw.text((2, y), line, font=font, fill=0)
+
+    def _render_dhm_wifi_list(self, image, draw):
+        """Scanned SSID list with smooth scroll."""
+        try:
+            from dhm_ui_state import LINE_HEIGHT
+        except ImportError:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        ui = self.dhm_ui
+        if not ui:
+            return
+        lh = LINE_HEIGHT
+        try:
+            font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        except Exception:
+            font = ImageDraw.ImageFont.load_default()
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        draw.text((2, 2), "Networks", fill=0, font=font)
+        st = (ui.wifi_status_line or "")[:44]
+        if st:
+            draw.text((2, 16), st, font=font, fill=0)
+        off = int(ui.wifi_scroll_offset)
+        base = 34 if st else 22
+        nets = ui.wifi_networks
+        for i, ssid in enumerate(nets):
+            y = base + i * lh - off
+            if y < -lh or y > H - 2:
+                continue
+            sel = i == ui.wifi_list_index
+            line = str(ssid)[:40]
+            if sel:
+                draw.rectangle((0, max(0, y - 1), W - 1, min(H - 1, y + lh)), fill=0)
+                draw.text((2, y), line, font=font, fill=255)
+            else:
+                draw.text((2, y), line, font=font, fill=0)
+        draw.text((2, H - 12), "B: connect  Y: back", font=font, fill=0)
+
+    def _dhm_hotspot_qr_image(self, data: str, size: tuple):
+        """1-bit PIL image for QR (optional qrcode[pil])."""
+        try:
+            import qrcode
+            from qrcode.constants import ERROR_CORRECT_L
+
+            qr = qrcode.QRCode(version=1, error_correction=ERROR_CORRECT_L, box_size=2, border=1)
+            qr.add_data(data)
+            qr.make(fit=True)
+            im = qr.make_image(fill_color="black", back_color="white").convert("L")
+            im = im.resize(size)
+            return im.point(lambda px: 0 if px < 128 else 255, mode="1")
+        except Exception:
+            return None
+
+    def _render_dhm_hotspot(self, image, draw):
+        """WiFi-only QR onboarding; 6s QR/text toggle ± A/X; B=exit; Y=retry WiFi."""
+        try:
+            from dhm_ui_state import hotspot_screen_payload
+        except ImportError:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        ui = self.dhm_ui
+        p = hotspot_screen_payload(self.shared_data)
+        try:
+            font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+            font_b = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
+        except Exception:
+            font = font_b = ImageDraw.ImageFont.load_default()
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        wifi_qr = p["wifi_qr"]
+        flip = bool(getattr(ui, "hotspot_view_flip", False)) if ui else False
+        show_qr = (int(time.time()) % 6 < 3) ^ flip
+        clients = int(p.get("clients") or 0)
+        footer_h = 12
+
+        if show_qr:
+            draw.text((2, 0), "Scan to connect", font=font_b, fill=0)
+            y = 14
+            qsize = min(120, W - 8, H - footer_h - y - 28)
+            if qsize >= 48:
+                qim = self._dhm_hotspot_qr_image(wifi_qr, (qsize, qsize))
+                if qim:
+                    x_q = (W - qsize) // 2
+                    image.paste(qim, (max(2, x_q), y))
+            y2 = H - footer_h - 22
+            if clients > 0:
+                draw.text((2, min(y2, H - footer_h - 34)), "Device connected!", font=font_b, fill=0)
+            draw.text((2, H - footer_h - 11), f"Join: {p['ssid'][:22]}", font=font, fill=0)
+        else:
+            draw.text((2, 0), "Ragnar Setup", font=font_b, fill=0)
+            y = 14
+            draw.text((2, y), f"SSID: {p['ssid'][:28]}", font=font, fill=0)
+            y += 12
+            draw.text((2, y), f"PASS: {p['password'][:24]}", font=font, fill=0)
+            y += 12
+            draw.text((2, y), "After join, portal opens", font=font, fill=0)
+            y += 12
+            draw.text((2, y), p["url"][:44], font=font, fill=0)
+            y += 12
+            draw.text((2, y), f"Clients: {clients}", font=font, fill=0)
+            if clients > 0:
+                draw.text((2, y + 12), "Device connected!", font=font_b, fill=0)
+        draw.text(
+            (2, H - footer_h),
+            "B:exit  A/X:view  Y:retry",
+            font=font,
+            fill=0,
+        )
+
+    def _render_dhm_network_mode(self, image, draw):
+        """Manual Client vs Hotspot (ragnar_fallback_ap.sh)."""
+        try:
+            from dhm_ui_state import NETWORK_MODE_SPEC, refresh_network_mode, format_ap_status_line
+        except ImportError:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        ui = self.dhm_ui
+        if not ui:
+            return
+        refresh_network_mode(ui)
+        lh = 16
+        try:
+            font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        except Exception:
+            font = ImageDraw.ImageFont.load_default()
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        draw.text((2, 2), "Network Mode", fill=0, font=font)
+        mode_line = f"Now: {'AP' if ui.network_mode == 'AP' else 'CLIENT'}"
+        draw.text((2, 16), mode_line[:44], fill=0, font=font)
+        st = (ui.network_status_line or "").strip()
+        if not st:
+            st = format_ap_status_line() if ui.network_mode == "AP" else "WiFi client"
+        draw.text((2, 30), st[:44], font=font, fill=0)
+        y0 = 48
+        for i, spec in enumerate(NETWORK_MODE_SPEC):
+            y = y0 + i * lh
+            if y > H - lh:
+                break
+            sel = i == ui.network_mode_index
+            line = spec["label"][:40]
+            if sel:
+                draw.rectangle((0, y - 1, W - 1, y + lh), fill=0)
+                draw.text((2, y), line, font=font, fill=255)
+            else:
+                draw.text((2, y), line, font=font, fill=0)
+        draw.text((2, H - 12), "B: select  Y: back", font=font, fill=0)
+
+    def _render_dhm_wifi_settings(self, image, draw):
+        """State UI: minimal WiFi summary; Y/BACK returns to root menu."""
+        try:
+            from displayhatmini_menu import _get_value_from_system
+        except ImportError:
+            return
+        W = self.shared_data.width
+        H = self.shared_data.height
+        try:
+            font = ImageDraw.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        except Exception:
+            font = ImageDraw.ImageFont.load_default()
+        draw.rectangle((0, 0, W - 1, H - 1), fill=255)
+        y = 2
+        draw.text((2, y), "WiFi Settings", fill=0, font=font)
+        y += 16
+        ssid = _get_value_from_system(self.shared_data, "wifi_ssid")
+        ip = _get_value_from_system(self.shared_data, "ip_address")
+        draw.text((2, y), f"SSID: {str(ssid)[:36]}", font=font, fill=0)
+        y += 14
+        draw.text((2, y), f"IP: {str(ip)[:36]}", font=font, fill=0)
+        y += 18
+        draw.text((2, y), "Y: Back", font=font, fill=0)
+
+    def _dhm_restore_brightness(self):
+        """After button input, undo idle dim if the ST7789 driver exposes brightness."""
+        if not self._dhm_state_ui or not self.dhm_ui or self._headless_display:
+            return
+        epd = getattr(self.epd_helper, "epd", None)
+        if epd is None:
+            return
+        for name, val in (("set_brightness", 255), ("set_bl", 255)):
+            fn = getattr(epd, name, None)
+            if callable(fn):
+                try:
+                    fn(val)
+                except Exception:
+                    pass
+                break
+
+    def _dhm_maybe_idle_dim(self):
+        """After IDLE_DIM_SEC without input, lower backlight if supported (optional)."""
+        if not self._dhm_state_ui or not self.dhm_ui or self._headless_display:
+            return
+        try:
+            from dhm_ui_state import IDLE_DIM_SEC
+        except ImportError:
+            IDLE_DIM_SEC = 30.0
+        ui = self.dhm_ui
+        if time.time() - ui.last_input_time < IDLE_DIM_SEC:
+            return
+        if getattr(ui, "dimmed", False):
+            return
+        ui.dimmed = True
+        epd = getattr(self.epd_helper, "epd", None)
+        if epd is None:
+            return
+        for name, val in (("set_brightness", 32), ("set_bl", 32)):
+            fn = getattr(epd, name, None)
+            if callable(fn):
+                try:
+                    fn(val)
+                except Exception:
+                    pass
+                break
+
     def _render_health_panel(self, image, draw):
         """PiSugar & system health overlay (scrollable)."""
         W, H = self.shared_data.width, self.shared_data.height
@@ -862,9 +1208,16 @@ class Display:
         import os as _os
         _log_ev = _os.environ.get("RAGNAR_DHM_LOG_EVENTS", "").strip().lower() in ("1", "true", "yes")
         while True:
-            ev = self.dhm_listener.get_event()
-            if ev is None:
+            raw = self.dhm_listener.get_event()
+            if raw is None:
                 break
+            ev = (
+                normalize_dhm_queue_event(raw)
+                if normalize_dhm_queue_event is not None
+                else raw
+            )
+            if ev is None:
+                continue
             if _log_ev:
                 logger.info(f"Display HAT Mini button: {ev}")
             if getattr(self.shared_data, "health_panel_open", False):
@@ -886,6 +1239,14 @@ class Display:
                             sd, "health_diag_lines", list(lines)
                         ),
                     )
+                continue
+
+            # State UI: A=UP B=SELECT X=DOWN Y=BACK; HOME → SELECT opens root menu (see dhm_ui_state.py)
+            if self._dhm_state_ui and map_hardware_event_to_logical and handle_dhm_state_event and apply_select:
+                logical = map_hardware_event_to_logical(ev)
+                if logical:
+                    handle_dhm_state_event(self, logical, apply_select)
+                    self._dhm_restore_brightness()
                 continue
 
             if ev == EVENT_MENU_TOGGLE:
@@ -1407,12 +1768,48 @@ class Display:
 
                 # Display HAT Mini: A=menu toggle, B=select/back, X=up, Y=down
                 if self.dhm_listener and self.dhm_listener.available:
+                    if self._dhm_state_ui and self.dhm_ui:
+                        try:
+                            from dhm_ui_state import sync_hotspot_screen, check_hotspot_idle_timeout
+
+                            sync_hotspot_screen(self)
+                            check_hotspot_idle_timeout(self)
+                        except Exception:
+                            pass
                     self._drain_dhm_menu_events()
 
                     if getattr(self.shared_data, "health_panel_open", False):
                         self._render_health_panel(image, draw)
                     elif self.menu_visible:
-                        self._render_settings_menu(image, draw)
+                        if self._dhm_state_ui and self.dhm_ui:
+                            from dhm_ui_state import (
+                                ROOT_MENU_ROW_HEIGHT,
+                                ROOT_MENU_SPEC,
+                                update_dhm_scroll,
+                                update_wifi_list_scroll,
+                            )
+
+                            st = self.dhm_ui.state
+                            if st == STATE_HOTSPOT:
+                                self._render_dhm_hotspot(image, draw)
+                            elif st == STATE_FULL_MENU:
+                                self._render_settings_menu(image, draw)
+                            elif st == STATE_NETWORK_MODE:
+                                self._render_dhm_network_mode(image, draw)
+                            elif st == STATE_WIFI_MENU:
+                                self._render_dhm_wifi_menu(image, draw)
+                            elif st == STATE_WIFI_LIST:
+                                update_wifi_list_scroll(self.dhm_ui)
+                                self._render_dhm_wifi_list(image, draw)
+                            elif st == STATE_SETTINGS:
+                                self._render_dhm_wifi_settings(image, draw)
+                            else:
+                                update_dhm_scroll(
+                                    self.dhm_ui, len(ROOT_MENU_SPEC), row_height=ROOT_MENU_ROW_HEIGHT
+                                )
+                                self._render_dhm_root_menu(image, draw)
+                        else:
+                            self._render_settings_menu(image, draw)
                     if self.menu_visible or getattr(self.shared_data, "health_panel_open", False):
                         if self.screen_reversed:
                             image = image.transpose(_PIL_ROTATE_180)
@@ -1569,6 +1966,23 @@ class Display:
                 for line in lines:
                     draw.text((int(4 * sx), y_text), line, font=self.shared_data.font_arialbold, fill=0)
                     y_text += (self.shared_data.font_arialbold.getbbox(line)[3] - self.shared_data.font_arialbold.getbbox(line)[1]) + 3
+
+                if self._dhm_state_ui and self.dhm_ui and getattr(self.dhm_ui, "state", None) == STATE_HOME:
+                    try:
+                        from dhm_ui_state import get_dhm_live_stats, refresh_network_mode, format_ap_status_line
+
+                        refresh_network_mode(self.dhm_ui)
+                        st = get_dhm_live_stats()
+                        line = f"CPU {st['cpu']:.0f}% MEM {st['mem']:.0f}% {st['temp']:.0f}C"
+                        draw.text((2, H - 24), line[:44], font=self.shared_data.font_arial9, fill=0)
+                        if self.dhm_ui.network_mode == "AP":
+                            draw.text((2, H - 12), format_ap_status_line()[:44], font=self.shared_data.font_arial9, fill=0)
+                        else:
+                            draw.text((2, H - 12), "Net: WiFi client", font=self.shared_data.font_arial9, fill=0)
+                    except Exception:
+                        pass
+
+                self._dhm_maybe_idle_dim()
 
                 if self.screen_reversed:
                     image = image.transpose(_PIL_ROTATE_180)
