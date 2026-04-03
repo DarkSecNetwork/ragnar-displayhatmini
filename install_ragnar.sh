@@ -1698,8 +1698,11 @@ if [ "$DISPLAY_MODE" = "displayhatmini" ]; then
   SPLASH_SRC="$INSTALLER_DIR/Ragnar/scripts/display_boot_splash.py"
   SPLASH_DST="$RAGNAR_DIR/scripts/display_boot_splash.py"
   if [ -f "$SPLASH_SRC" ]; then
-    # cp fails with "same file" when installer runs from ~/Ragnar (INSTALLER_DIR == HOME/repo); set -e would abort.
-    if [ ! "$SPLASH_SRC" -ef "$SPLASH_DST" ]; then
+    # cp errors ("same file") and exits 1 if src and dst are one file — kills install with set -e.
+    splash_same=0
+    [ "$SPLASH_SRC" = "$SPLASH_DST" ] && splash_same=1
+    [ -e "$SPLASH_DST" ] && [ "$SPLASH_SRC" -ef "$SPLASH_DST" ] && splash_same=1
+    if [ "$splash_same" -eq 0 ]; then
       cp -a "$SPLASH_SRC" "$SPLASH_DST"
     fi
     chmod +x "$SPLASH_DST" 2>/dev/null || true
