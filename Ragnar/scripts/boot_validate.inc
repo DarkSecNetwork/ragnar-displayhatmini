@@ -26,6 +26,19 @@ ragnar_boot_backup() {
     f="/boot/config.txt"
     [[ -f "${f}.ragnar.bak" ]] || cp -a "$f" "${f}.ragnar.bak" 2>/dev/null && echo "Backed up: ${f}.ragnar.bak" || true
   fi
+  # Optional: timestamped copies for multi-run forensics (set RAGNAR_BOOT_BACKUP_VERSIONED=1).
+  if [[ "${RAGNAR_BOOT_BACKUP_VERSIONED:-0}" == "1" ]]; then
+    local ts
+    ts=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo "unknown")
+    for f in "$fw/config.txt" "$fw/cmdline.txt"; do
+      [[ -f "$f" ]] || continue
+      cp -a "$f" "${f}.ragnar.${ts}.bak" 2>/dev/null && echo "Versioned backup: ${f}.ragnar.${ts}.bak"
+    done
+    if [[ "$(ragnar_boot_firmware_dir)" == "/boot/firmware" ]] && [[ -f /boot/config.txt ]]; then
+      f="/boot/config.txt"
+      cp -a "$f" "${f}.ragnar.${ts}.bak" 2>/dev/null && echo "Versioned backup: ${f}.ragnar.${ts}.bak"
+    fi
+  fi
 }
 
 ragnar_boot_restore_from_bak() {

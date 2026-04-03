@@ -79,6 +79,8 @@ sudo ./install_ragnar.sh
 
 If you want to know exactly what runs when you execute `install_ragnar.sh`, here is the order of operations:
 
+**Maintainers:** automated checks and release criteria — [INSTALLER_VALIDATION.md](INSTALLER_VALIDATION.md).
+
 1. **Checks** — Ensures script is run with `sudo`.
 2. **Display selection** — You choose display type (1–10); for Display HAT Mini you choose Landscape or Portrait.
 3. **Optional features** — You choose whether to install Pwnagotchi bridge and PiSugar.
@@ -92,7 +94,7 @@ If you want to know exactly what runs when you execute `install_ragnar.sh`, here
    - Patches `shared.py` and `epd_helper.py` for Display HAT Mini; creates data dirs and dictionary files. Uses **Ragnar/scripts/display_boot_splash.py** from the repo if present, otherwise creates it.
 10. **Config** — Writes `config/shared_config.json` (and related) for the chosen display.
 11. **Patches** — Ensures scanning is in `actions.json` and that Display HAT Mini buffer validation is skipped where needed.
-12. **Boot** — Adds `dtparam=act_led_trigger=none` to `/boot/firmware/config.txt` (or `/boot/config.txt`) to disable the green activity LED (Display HAT Mini installs).
+12. **Boot** — Backs up `config.txt` / `cmdline.txt`, enables SPI, optional USB gadget / static IP, applies `gpu_mem` with validation, then validates boot files (restores `.ragnar.bak` on failure). Does **not** disable the green ACT LED (older installs may remove a prior `act_led_trigger=none` line).
 13. **Service** — Creates `/etc/systemd/system/ragnar.service`: runs after network and SSH, 2s delay, optional boot splash (Display HAT Mini), then `python3 -OO /home/ragnar/Ragnar/Ragnar.py` (or `headlessRagnar.py` for headless); `WorkingDirectory=/home/ragnar/Ragnar`; restart always.
 14. **Enable & start** — `systemctl daemon-reload`, `systemctl enable ragnar`, starts the service.
 15. **Optional** — Runs PiSugar installer and Pwnagotchi bridge script if you chose them.

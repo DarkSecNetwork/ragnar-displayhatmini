@@ -9,6 +9,7 @@
 #   RAGNAR_INSTALLER_LOG          — log path (default /var/log/ragnar-installer.log)
 #   RAGNAR_INSTALLER_GPU_MEM      — skip|none|min|<n> — see Ragnar/scripts/boot_validate.inc
 #   RAGNAR_INSTALLER_BACKUP_APP=1 — tar ~/Ragnar to /var/backups before replacing (re-runs)
+#   RAGNAR_BOOT_BACKUP_VERSIONED=1 — also write config/cmdline copies as *.ragnar.<UTC>.bak
 #   RAGNAR_INSTALLER_PERF_TUNING=1 — not recommended on Pi Zero 2 W
 set -euo pipefail
 
@@ -78,6 +79,18 @@ ragnar_boot_backup() {
   if [[ "$(ragnar_boot_firmware_dir)" == "/boot/firmware" ]] && [[ -f /boot/config.txt ]]; then
     f="/boot/config.txt"
     [[ -f "${f}.ragnar.bak" ]] || cp -a "$f" "${f}.ragnar.bak" 2>/dev/null && echo "Backed up: ${f}.ragnar.bak" || true
+  fi
+  if [[ "${RAGNAR_BOOT_BACKUP_VERSIONED:-0}" == "1" ]]; then
+    local ts
+    ts=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo "unknown")
+    for f in "$fw/config.txt" "$fw/cmdline.txt"; do
+      [[ -f "$f" ]] || continue
+      cp -a "$f" "${f}.ragnar.${ts}.bak" 2>/dev/null && echo "Versioned backup: ${f}.ragnar.${ts}.bak"
+    done
+    if [[ "$(ragnar_boot_firmware_dir)" == "/boot/firmware" ]] && [[ -f /boot/config.txt ]]; then
+      f="/boot/config.txt"
+      cp -a "$f" "${f}.ragnar.${ts}.bak" 2>/dev/null && echo "Versioned backup: ${f}.ragnar.${ts}.bak"
+    fi
   fi
 }
 
@@ -2303,7 +2316,7 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^systemd-networkd-wait-onlin
 fi
 
 # Health / pre-reboot tooling
-chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" "$RAGNAR_DIR/scripts/fix_alsa_udev_restore_label.sh" "$RAGNAR_DIR/scripts/ragnar_pi_boot_mitigations.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_wifi.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_bluetooth.sh" "$RAGNAR_DIR/scripts/ragnar_verify_kernel_firmware.sh" "$RAGNAR_DIR/scripts/ragnar_repair_alsa_divert.sh" "$RAGNAR_DIR/scripts/ragnar_wait_network_ready.sh" "$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh" 2>/dev/null || true
+chmod +x "$RAGNAR_DIR/scripts/pre_reboot_check.sh" "$RAGNAR_DIR/scripts/safe_reboot.sh" "$RAGNAR_DIR/scripts/ragnar_startup_selftest.py" "$RAGNAR_DIR/scripts/check_usb_ssh.sh" "$RAGNAR_DIR/scripts/ragnar_boot_display.py" "$RAGNAR_DIR/scripts/boot_pisugar_facts.py" "$RAGNAR_DIR/scripts/validate_boot_files.sh" "$RAGNAR_DIR/scripts/installer_test_harness.sh" "$RAGNAR_DIR/scripts/installer_diff_embedded_boot_validate.sh" "$RAGNAR_DIR/scripts/install_pisugar_boot_dropin.sh" "$RAGNAR_DIR/scripts/check_pisugar.sh" "$RAGNAR_DIR/scripts/export_boot_log_to_firmware.sh" "$RAGNAR_DIR/scripts/fix_alsa_udev_restore_label.sh" "$RAGNAR_DIR/scripts/ragnar_pi_boot_mitigations.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_wifi.sh" "$RAGNAR_DIR/scripts/ragnar_mitigate_bluetooth.sh" "$RAGNAR_DIR/scripts/ragnar_verify_kernel_firmware.sh" "$RAGNAR_DIR/scripts/ragnar_repair_alsa_divert.sh" "$RAGNAR_DIR/scripts/ragnar_wait_network_ready.sh" "$RAGNAR_DIR/scripts/ragnar_fallback_ap.sh" 2>/dev/null || true
 touch /var/log/ragnar_health.log 2>/dev/null && chmod 644 /var/log/ragnar_health.log 2>/dev/null || true
 
 # Test if Ragnar can start before enabling service
