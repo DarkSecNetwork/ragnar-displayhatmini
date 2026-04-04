@@ -1417,9 +1417,19 @@ class SharedData:
             raise
 
     def _get_image_scale(self):
-        """Get the image scale factor for the current display.
-        Always returns 1.0 — icons are drawn at their native size on all displays.
-        Wider displays (e.g. 2.7" 176x264) centre the content instead of stretching."""
+        """Get the image scale factor for bitmap assets (stats, status glyphs, character frames).
+
+        E‑paper layouts use native BMP sizes. Display HAT Mini draws the same 122×250 design
+        scaled to the panel via ``scale_factor_x`` / ``scale_factor_y``; without scaling, icons
+        stay tiny while text and positions grow. Use the average axis scale so icons track the
+        main UI (landscape/portrait safe when one axis is < 1.0).
+        """
+        cfg = getattr(self, "config", None) or {}
+        if cfg.get("epd_type") == "displayhatmini":
+            sx = float(getattr(self, "scale_factor_x", 1.0))
+            sy = float(getattr(self, "scale_factor_y", 1.0))
+            s = (sx + sy) / 2.0
+            return max(1.0, s)
         return 1.0
 
     def load_images(self):

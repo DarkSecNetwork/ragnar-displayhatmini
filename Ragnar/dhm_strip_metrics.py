@@ -10,7 +10,7 @@ from typing import Optional
 _STATUS_STRIP_GAP = 4
 
 
-def wifi_icon_scale_for_layout(screen_w: int) -> int:
+def wifi_icon_scale_for_layout(screen_w: int, screen_h: Optional[int] = None) -> int:
     """Same default as UIRenderer.wifi_icon_scale for strip width reservation."""
     env = os.environ.get("RAGNAR_UI_WIFI_ICON_SCALE", "").strip()
     if env:
@@ -18,7 +18,8 @@ def wifi_icon_scale_for_layout(screen_w: int) -> int:
             return max(1, int(env))
         except ValueError:
             pass
-    return 2 if screen_w <= 200 else 1
+    m = min(screen_w, screen_h if screen_h is not None else screen_w)
+    return 2 if m <= 200 or m >= 220 else 1
 
 
 def dhm_menu_right_reserved_px(screen_w: int, wifi_icon_scale: Optional[int] = None) -> int:

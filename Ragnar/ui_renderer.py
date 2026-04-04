@@ -206,10 +206,15 @@ class UIRenderer:
         self._auto_hotspot_suggested = False
         # 2× scale ≈ 10×10 px on 128×64 DHM; override with RAGNAR_UI_WIFI_ICON_SCALE
         _ws = os.environ.get("RAGNAR_UI_WIFI_ICON_SCALE", "").strip()
+        _min_side = min(width, height)
         try:
-            self.wifi_icon_scale = int(_ws) if _ws else (2 if width <= 200 else 1)
+            if _ws:
+                self.wifi_icon_scale = int(_ws)
+            else:
+                # Small panels: 2× 5×5 glyphs; full DHM (e.g. 240×320): also 2× so strip matches enlarged UI
+                self.wifi_icon_scale = 2 if _min_side <= 200 or _min_side >= 220 else 1
         except ValueError:
-            self.wifi_icon_scale = 2 if width <= 200 else 1
+            self.wifi_icon_scale = 2 if _min_side <= 200 or _min_side >= 220 else 1
         _hs = os.environ.get("RAGNAR_UI_HOTSPOT_ICON_SCALE", "").strip()
         try:
             self.hotspot_icon_scale = int(_hs) if _hs else self.wifi_icon_scale

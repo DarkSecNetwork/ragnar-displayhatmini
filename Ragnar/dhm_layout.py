@@ -99,7 +99,7 @@ def _clamp_menu_icon_for_label_room(
     w = max(1, int(screen_w))
     h = max(1, int(screen_h))
     m = min(w, h)
-    wifi_sc = wifi_icon_scale_for_layout(w)
+    wifi_sc = wifi_icon_scale_for_layout(w, h)
     reserved = dhm_menu_right_reserved_px(w, wifi_sc)
     min_label = 48
     max_icon = w - 4 - 6 - min_label - reserved
@@ -217,7 +217,7 @@ def compute_dhm_layout(
     gap_sm = max(4, scale_px(6, sc, min_v=4, max_v=10))
     gap_md = max(6, scale_px(8, sc, min_v=6, max_v=14))
 
-    tile = wifi_icon_scale_for_layout(w)
+    tile = wifi_icon_scale_for_layout(w, h)
 
     label_off = pad_x + icon + gap_sm
 

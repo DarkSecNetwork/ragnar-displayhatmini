@@ -2012,8 +2012,8 @@ class Display:
                     except Exception:
                         pass
 
-                # Stats — positions scaled to fill the physical width/height,
-                # but icon images stay at their original pixel size.
+                # Stats — positions scaled to fill the physical width/height; BMP icons are
+                # scaled in SharedData.load_images for displayhatmini to match.
                 stats = [
                     (self.shared_data.target,    (int(8 * sx),   int(22 * sy)), (int(28 * sx),  int(22 * sy)), str(self.shared_data.targetnbr)),
                     (self.shared_data.port,      (int(47 * sx),  int(22 * sy)), (int(67 * sx),  int(22 * sy)), str(self.shared_data.portnbr)),

@@ -14,7 +14,6 @@ from typing import Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 from dhm_strip_metrics import dhm_menu_right_reserved_px
-from dhm_strip_metrics import wifi_icon_scale_for_layout as _wifi_icon_scale_for_layout
 
 ICON_SIZE_DEFAULT = 32
 
